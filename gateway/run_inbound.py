@@ -453,10 +453,28 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
         message_id = getattr(event, "message_id", None)
         if not message_id:
             return
+        deleted = False
         try:
-            await adapter.delete_message(chat_id=source.chat_id, message_id=str(message_id))
+            deleted = await adapter.delete_message(chat_id=source.chat_id, message_id=str(message_id))
         except Exception:
             logger.debug("Failed to scrub secret clarify reply", exc_info=True)
+        if deleted is not False:
+            return
+        # The secret is still in the chat (a Discord DM, a bot without Manage Messages, a platform
+        # with no delete API). Say so, so the user can delete it. No reply anchor: a Discord reply
+        # shows a preview of the message it answers, which would repeat the secret.
+        logger.info("Secret clarify reply left in chat (platform refused delete; session chat=%s)", source.chat_id)
+        await self._send_unanchored_notice(adapter, source, t("gateway.clarify.secret_not_deleted"))
+
+    async def _send_unanchored_notice(self, adapter, source, text: str) -> None:
+        """Best-effort notice in the source chat/thread with no reply anchor (a Discord reply shows
+        a preview of the message it answers, and that message may hold a secret)."""
+        try:
+            metadata = self._thread_metadata_for_target(
+                source.platform, source.chat_id, source.thread_id, chat_type=source.chat_type)
+            await adapter.send(source.chat_id, text, metadata=metadata)
+        except Exception:
+            logger.debug("Failed to send a clarify notice", exc_info=True)
 
     # Reply → choice for a pending slash-confirm prompt; the command spelling wins over the
     # bang/slash-stripped free-text spelling.

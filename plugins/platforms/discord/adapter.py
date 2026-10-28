@@ -3487,6 +3487,23 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
             logger.error("[%s] Failed to edit Discord message %s: %s", self.name, message_id, e, exc_info=True)
             return SendResult(success=False, error=str(e))
 
+    async def delete_message(self, chat_id: str, message_id: str) -> bool:
+        """Delete a message; True on success, False when Discord refuses or the bot is offline.
+
+        The bot can always delete its own messages. To delete a user's message (a secret typed in
+        answer to a vault prompt) it needs Manage Messages in that guild channel or thread. In a DM
+        Discord never lets a bot delete the other person's message (error 50003), so it stays.
+        """
+        if not self._client:
+            return False
+        try:
+            channel = await self._resolve_channel(chat_id)
+            await channel.get_partial_message(int(message_id)).delete()
+            return True
+        except Exception as e:  # health: allow BLE001 -- best-effort: Forbidden / NotFound / DM all mean "left in place"
+            logger.debug("[%s] Could not delete Discord message %s: %s", self.name, message_id, e, exc_info=True)
+            return False
+
     @staticmethod
     def _is_reply_reference_rejected(err: Exception) -> bool:
         """Discord refused the reply anchor: system-message target (50035) or deleted target (10008)."""
