@@ -297,7 +297,10 @@ class GatewayTurnProgressMixin:
     def _progress_build_message(self, tool_name, preview, args) -> Optional[str]:
         """Render the progress line. Verbose mode queues directly (no dedup) and returns None."""
         ctx = self._ctx
-        from agent.display import get_tool_emoji
+        from agent.display import get_tool_emoji, redact_tool_args_for_display
+        # Secret arguments (browser_type text, a pasted browser_vault password) never reach the chat,
+        # whichever callback path delivered the args.
+        args = redact_tool_args_for_display(tool_name, args) or args
         emoji = get_tool_emoji(tool_name, default="⚙️")
         try:
             adapter = self._runner._delivery_adapter_for(ctx.source)

@@ -330,7 +330,21 @@ def redact_tool_args_for_display(tool_name: str, args: dict | None) -> dict | No
         return args
     if tool_name == "browser_type" and isinstance(args.get("text"), str):
         return {**args, "text": redact_sensitive_text(args["text"], force=True)}
+    if tool_name == "browser_vault" and (args.get("password") or args.get("extra")):
+        # A pasted login: the password and every extra value (PIN, security answer) never show.
+        masked = dict(args)
+        if masked.get("password"):
+            masked["password"] = VAULT_ARG_MASK
+        extra = masked.get("extra")
+        if isinstance(extra, dict):
+            masked["extra"] = {k: VAULT_ARG_MASK for k in extra}
+        elif extra:
+            masked["extra"] = VAULT_ARG_MASK
+        return masked
     return args
+
+
+VAULT_ARG_MASK = "«hidden»"
 
 
 def _delegate_task_goals(tasks: Any, *, per_goal_len: int) -> list[str]:
