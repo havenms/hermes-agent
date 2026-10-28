@@ -449,10 +449,13 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
         if _text_outcome == _clarify_mod.TEXT_NOT_AN_ANSWER:
             # The reply does not look like the requested value (a chat message after a long wait,
             # not a code or a username). Keep the prompt open and say so. On a secret prompt the
-            # message may still hold a secret typed in the wrong place, so scrub it as well.
+            # message may still hold a secret typed in the wrong place, so scrub it as well. On the
+            # email card, a reply with a password-shaped word ("me@x.com Pass123") is scrubbed too.
             _clarify_adapter = self._delivery_adapter_for(source)
             if _clarify_adapter:
-                if _pending_clarify.secret:
+                if _pending_clarify.secret or (
+                        _pending_clarify.kind and _pending_clarify.owner_user_id
+                        and any(_clarify_mod.looks_like_secret(w) for w in _raw_clarify_reply.split())):
                     await self._scrub_secret_reply(_clarify_adapter, source, event)
                 await self._send_unanchored_notice(_clarify_adapter, source, t("gateway.clarify.not_an_answer"))
             return _retain("a reply that does not match the requested value")

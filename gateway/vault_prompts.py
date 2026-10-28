@@ -57,7 +57,13 @@ VAULT_PROMPT_TIMEOUT_DEFAULTS = {"save_login": 4 * 3600, "code": 30 * 60, "unloc
 # A typed reply must look like the answer, or the prompt stays open and the user gets a hint.
 # Without this, the first unrelated message after a long wait ("are you there?") would be
 # stored as the username or typed into the page as the code.
-IDENTIFIER_PATTERN = r"\S{1,254}"  # email, phone or username: one token, no spaces
+# Email, phone or username: one token, no spaces, and not a one-word chat reply ("hi", "ok",
+# "thanks", "yes"). The negative lookahead lists the chat words, case-insensitive, with an optional
+# trailing "!", "." or "?".
+_CHAT_TOKEN = (r"(?:yes|yep|yeah|yup|ya|no|nope|nah|ok|okay|k|kk|hi|hey|hello|hiya|thanks|thx|ty|sure|done|"
+               r"wait|sorry|lol|great|cool|nice|good|fine|please|help|what|why|how|hmm|huh|here|there|"
+               r"one|sec|min|later|soon|cheers|bye|morning|evening|night|welcome|again|still|now)")
+IDENTIFIER_PATTERN = rf"(?i)(?!{_CHAT_TOKEN}[!.?,]*$)\S{{2,254}}"
 # The password card's way back. A typed "wrong", "wrong email" or "not my email" goes back to the
 # email or username card (``tools.clarify_gateway.WRONG_WORDS``). "skip", "cancel" and "stop" still
 # decline the login (``DECLINE_WORDS``).
