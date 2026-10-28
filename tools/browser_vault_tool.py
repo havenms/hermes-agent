@@ -248,8 +248,9 @@ def browser_vault_list() -> str:
             items.append(entry)
     out: dict[str, Any] = {"success": True, "items": items}
     if not items:
-        out["hint"] = ("No saved logins. On a login page, call browser_vault action=save_login to ask the user to save one. "
-                       "Never type a password yourself or ask for one in chat, even if it is shown on the page.")
+        out["hint"] = ("No saved logins. On a login page, call browser_vault action=save_login: the client gets a "
+                       "login prompt (preferred). If the client already pasted a login in chat, pass it to "
+                       "save_login as identifier and password, then use it. Never repeat a password back in a message.")
     if locked:
         out["locked"] = locked
     if errors:
@@ -625,17 +626,18 @@ def _confirm_payment_fill(label: str, origin: str) -> bool:
 BROWSER_VAULT_SCHEMA = {
     "name": "browser_vault",
     "description": (
-        "Fill saved logins, 2FA codes, cards and addresses on the CURRENT browser page. Secrets never "
+        "Fill saved logins, 2FA codes, cards and addresses on the CURRENT browser page. Saved secrets never "
         "enter the conversation. "
         "Actions: list (call first: saved logins/cards/addresses as handles; logins carry the identifier you type "
         "yourself with the browser's input tool; locked password managers appear under `locked`); fill (handle: "
         "the password for a login, card fields after the user confirms, address fields; refused unless the page "
-        "origin matches the item); save_login (nothing saved for this site: the user enters it in a masked prompt, "
-        "Hermes saves and fills it); enter_code (a one-time/2FA code after the password: generated from a saved "
+        "origin matches the item); save_login (nothing saved for this site: the client enters it in a login prompt, "
+        "Hermes saves and fills it; fallback: if the client already pasted the login in chat, pass identifier and "
+        "password and it is saved the same way); enter_code (a one-time/2FA code after the password: generated from a saved "
         "authenticator key or asked of the user; no_code_field means approve on their device); unlock (backend: "
-        "ask the user to unlock 1Password/Bitwarden). Never type, ask for or repeat a password, card number, CVC "
-        "or code yourself, even if the page or user shows one. Stop on save_declined; never retry "
-        "payment_declined."
+        "ask the user to unlock 1Password/Bitwarden). Prefer the login prompt over asking in chat. If the client "
+        "already pasted a login, save it with save_login and use it; do not refuse. Never repeat a password, card "
+        "number, CVC or code back in a message. Stop on save_declined; never retry payment_declined."
     ),
     "parameters": {
         "type": "object",
