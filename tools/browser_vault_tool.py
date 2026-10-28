@@ -399,7 +399,8 @@ def browser_vault_save_login(label: str = "", task_id: Optional[str] = None,
                        "form, then call browser_vault action=fill with this handle.")
     if pasted:
         out["source"] = "pasted"
-        out["chat_message_removed"] = _scrub_pasted_message()
+        out["chat_message_removed"] = _scrub_pasted_message(
+            (str(password), *(str(v) for v in pasted_extra.values() if v)))
         out["next"] += (" Never repeat the password in a message." if out["chat_message_removed"] else
                         " The client's message with the password is still in the chat: ask them to delete it. "
                         "Never repeat the password in a message.")
@@ -557,14 +558,17 @@ def _page_title(task_id: str) -> str:
     return title[:60] if title and not title.lower().startswith(("http://", "https://")) else ""
 
 
-def _scrub_pasted_message() -> bool:
-    """Ask the surface to delete the user's message that carried the pasted login (best effort)."""
+def _scrub_pasted_message(values: tuple = ()) -> bool:
+    """Ask the surface to delete the user's message that carried the pasted login (best effort).
+
+    ``values`` are the pasted secrets. A surface that takes them deletes the turn's message only when
+    that message holds one of them, so "True" means the password is really gone from the chat."""
     from agent.vault_backends.unlock import get_pasted_secret_scrub_callback
     scrub = get_pasted_secret_scrub_callback()
     if scrub is None:
         return False
     try:
-        return bool(scrub())
+        return bool(scrub(values) if values and _accepts_kw(scrub, "values") else scrub())
     except Exception:  # health: allow BLE001 -- the login is saved; a failed delete only keeps the message
         logger.debug("pasted-login message scrub failed", exc_info=True)
         return False

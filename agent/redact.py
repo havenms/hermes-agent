@@ -81,6 +81,24 @@ def redact_registered_vault_values(text: str) -> str:
             text = text.replace(value, "«redacted-vault-secret»")
     return text
 
+_SECRET_SHAPE_MASK = "«redacted»"
+
+
+def scrub_secret_shapes(text: str) -> str:
+    """Log-line scrub for a client message that may hold a pasted login: every registered vault
+    value, and every word that is shaped like a password (one token of 6 or more characters with
+    a letter and a digit or an inner symbol, not an email or a link). For logs only: it also masks
+    some harmless words such as "v2.0.1"."""
+    if not isinstance(text, str) or not text:
+        return text
+    text = redact_registered_vault_values(text)
+    try:
+        from tools.clarify_gateway import looks_like_secret
+    except Exception:  # pragma: no cover - the registered values are still masked
+        return text
+    return " ".join(_SECRET_SHAPE_MASK if looks_like_secret(word) else word for word in text.split(" "))
+
+
 # Sensitive query-string param names (case-insensitive): opaque tokens / OAuth
 # codes / pre-signed signatures with no vendor prefix.
 # Ported from nearai/ironclaw#2529 — catches tokens whose values don't match any known vendor prefix regex

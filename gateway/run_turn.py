@@ -17,6 +17,7 @@ import queue
 import threading
 import time
 from agent.i18n import t
+from agent.redact import scrub_secret_shapes
 from agent.session_activity import format_iteration_progress
 from agent.turn_failure_copy import FAILED_TURN_DISPLAY_KIND, FAILED_TURN_NOTICE, PARTIAL_FAILED_TURN_NOTICE
 from contextlib import nullcontext, suppress
@@ -219,9 +220,9 @@ class GatewayTurnMixin(GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, Gateway
         logger.info(
             "inbound message: platform=%s user=%s chat=%s msg=%r reply_to_id=%s reply_to_text=%r",
             _platform_name, source.user_name or source.user_id or "unknown",
-            source.chat_id or "unknown", (event.text or "")[:80].replace("\n", " "),
+            source.chat_id or "unknown", scrub_secret_shapes(event.text or "")[:80].replace("\n", " "),
             getattr(event, "reply_to_message_id", None),
-            (getattr(event, "reply_to_text", None) or "")[:80].replace("\n", " "),
+            scrub_secret_shapes(getattr(event, "reply_to_text", None) or "")[:80].replace("\n", " "),
         )
 
         resolved = await self._hmwa_resolve_session(event, source)

@@ -657,11 +657,14 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
             return ""
         return response
 
-    def _scrub_turn_message_sync(self) -> bool:
+    def _scrub_turn_message_sync(self, values: tuple = ()) -> bool:
         """Delete the user's message that started this turn; True when the platform removed it.
 
         The agent calls this through browser_vault save_login after it stored a login the user
         pasted in that message. Best effort: a Discord DM or a bot without Manage Messages keeps it.
+        ``values`` are the pasted secrets. When the turn's message does not hold one of them (the
+        login was in an earlier message), nothing is deleted and the result is False, so the bot
+        asks the client to delete it. The values are never logged.
         """
         ctx = self._ctx
         adapter = getattr(ctx, "_status_adapter", None)
@@ -669,6 +672,12 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
         message_id = getattr(ctx, "inbound_message_id", None) or getattr(source, "message_id", None)
         if adapter is None or source is None or not message_id:
             return False
+        if values:
+            turn_text = " ".join(str(x) for x in (getattr(ctx, "persist_user_message", None),
+                                                  getattr(ctx, "message", None)) if isinstance(x, str))
+            if not any(v and v in turn_text for v in values):
+                logger.info("Pasted-login scrub skipped: the turn's message does not hold the pasted secret")
+                return False
         fut = self._schedule(adapter.delete_message(source.chat_id, str(message_id)),
                              "Pasted-login message delete failed to schedule")
         try:
