@@ -1028,6 +1028,7 @@ platform:
     prompt:
       truncated_marker: "... [gekürzt]"
       clarify_title: "Hermes benötigt Ihre Eingabe"
+      clarify_title_named: "{name} braucht deine Eingabe"
       clarify_hint_buttons: "Wählen Sie unten eine Option oder klicken Sie auf ✏️ Sonstiges, um eine eigene Antwort einzugeben."
       clarify_hint_text: "Antworten Sie in diesem Kanal mit Ihrer Antwort."
       default_hint: " (Standard: {default})"

@@ -1028,6 +1028,7 @@ platform:
     prompt:
       truncated_marker: "... [giorraithe]"
       clarify_title: "Tá d'ionchur de dhíth ar Hermes"
+      clarify_title_named: "Tá do fhreagra ag teastáil ó {name}"
       clarify_hint_buttons: "Roghnaigh ceann thíos, nó cliceáil ✏️ Eile chun freagra saincheaptha a chlóscríobh."
       clarify_hint_text: "Freagair sa chainéal seo le do fhreagra."
       default_hint: " (réamhshocrú: {default})"

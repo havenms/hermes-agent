@@ -1028,6 +1028,7 @@ platform:
     prompt:
       truncated_marker: "... [省略]"
       clarify_title: "Hermes が入力を求めています"
+      clarify_title_named: "{name}から質問があります"
       clarify_hint_buttons: "下から選ぶか、✏️ その他 をクリックして自由に入力してください。"
       clarify_hint_text: "このチャンネルで回答を返信してください。"
       default_hint: " (デフォルト: {default})"

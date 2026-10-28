@@ -1028,6 +1028,7 @@ platform:
     prompt:
       truncated_marker: "... [kısaltıldı]"
       clarify_title: "Hermes girdinize ihtiyaç duyuyor"
+      clarify_title_named: "{name} yanıtınızı bekliyor"
       clarify_hint_buttons: "Aşağıdan birini seçin veya özel bir yanıt yazmak için ✏️ Diğer'e tıklayın."
       clarify_hint_text: "Yanıtınızı bu kanala yazın."
       default_hint: " (varsayılan: {default})"

@@ -213,7 +213,7 @@ gateway:
     set: "⊙ Goal set ({budget}-turn budget): {goal}\nI'll keep working until the goal is done, you pause/clear it, or the budget is exhausted.\nControls: /goal status · /goal pause · /goal resume · /goal clear"
     gate_add_admin_only: "⛔ /goal gate add requires an explicitly configured gateway admin (allow_admin_from for DMs, group_allow_admin_from for groups)."
   help:
-    header: "📖 **Hermes Commands**\n"
+    header: "📖 **Commands**\n"
     skill_header: "\n⚡ **Skill Commands** ({count} active):"
     more_use_commands: "\n... and {count} more. Use `/commands` for the full paginated list."
   insights:
@@ -614,7 +614,7 @@ gateway:
     none_value: "none"
     unknown_value: "unknown"
   exec_approval:
-    header: "Hermes wants to run a command that needs your OK"
+    header: "I want to run a command that needs your OK"
     reason_label: "Why it was flagged"
     default_reason: "dangerous command"
     smart_deny_line: "Smart DENY: owner override applies to this one operation only."
@@ -647,7 +647,7 @@ gateway:
     turn_error_detailed: "Sorry, I encountered an error ({error_type}).\n{error_detail}\nTry again or use /reset to start a fresh session."
     turn_error: "Sorry, I encountered an error."
     context_injection_refused: "Context injection refused."
-    no_home_channel: "📬 No home channel is set for {platform}. A home channel is where Hermes delivers cron job results and cross-platform messages.\n\nType {sethome_cmd} to make this chat your home channel, or ignore to skip."
+    no_home_channel: "📬 No home channel is set for {platform}. A home channel is where I deliver cron job results and cross-platform messages.\n\nType {sethome_cmd} to make this chat your home channel, or ignore to skip."
 
   unauthorized:
     action_notice: "This bot is private and you're not on its allowed list. If you own it, run `hermes pairing approve {platform} <request-id>` on the host (`hermes pairing list` shows the id)."
@@ -683,7 +683,7 @@ gateway:
     bad_request: "⚠️ The AI model service rejected this request. Try rephrasing your message, or use /model to switch models."
     connection_interrupted: "⚠️ The connection to the AI model service was interrupted mid-request — usually transient. Use /retry to try again; if it keeps happening, run `hermes doctor` on the host."
     unreachable: "⚠️ The AI model service isn't reachable right now — the configured model endpoint is not running or is unreachable. Wait a moment and use /retry; if it persists, run `hermes doctor` on the host."
-    connection_unknown: "⚠️ Hermes could not reach the AI model service (no further detail from the SDK). Use /retry to try again; if it persists, run `hermes doctor` on the host."
+    connection_unknown: "⚠️ I could not reach the AI model service (no further detail from the SDK). Use /retry to try again; if it persists, run `hermes doctor` on the host."
     context_overflow: "⚠️ This conversation has grown too long for me to read all at once. Use /compress to shorten the history, or /new to start a fresh conversation."
     usage_limit_resets: "⏱️ The AI model service's usage limit is reached; it resets in {window}. Use /retry after that, or /model to switch models."
     provider_kept_failing: "⚠️ The AI model service kept failing. Use /retry to try again, or /model to switch models. Details are in the gateway log (`hermes logs`)."
@@ -753,20 +753,20 @@ gateway:
     draining_maintenance: "⏳ This agent is draining for a maintenance action and isn't accepting new turns right now. It'll be back in a moment — please resend shortly."
     another_turn_running: "⏳ Another turn is still running on this session. To protect the transcript, this message was not processed. Wait for the active turn to finish, then resend it."
     behavior_queue_short: "queues for next turn"
-    behavior_queue_long: "Messages will be queued for the next turn while Hermes is busy."
+    behavior_queue_long: "Messages will be queued for the next turn while I am busy."
     behavior_steer_short: "steers into current run (after next tool call)"
     behavior_steer_long: "Messages will be steered into the current run (after the next tool call)."
     behavior_interrupt_short: "interrupts current run"
-    behavior_interrupt_long: "Messages will interrupt the current run while Hermes is busy."
+    behavior_interrupt_long: "Messages will interrupt the current run while I am busy."
     status: "**Busy input mode: `{mode}`\nMessages while busy: _{behavior}_\nChange with `/busy queue`, `/busy steer`, or `/busy interrupt`."
     unknown_mode: "Unknown mode `{arg}`. Use `/busy queue`, `/busy steer`, or `/busy interrupt`."
     save_failed: "Busy input mode could not be saved to config. Mode unchanged."
     set: "Busy input mode set to **`{mode}`** (saved).\n_{behavior}_"
   pause:
     resumed: "▶️ Resumed — new work is accepted again."
-    not_paused: "Hermes wasn't paused."
+    not_paused: "I was not paused."
     reason_suffix: " (reason: {reason})"
-    already_paused: "⏸️ Hermes is already paused{suffix}. Use `/pause off` to resume."
+    already_paused: "⏸️ I am already paused{suffix}. Use `/pause off` to resume."
     paused: "⏸️ Paused{suffix}. New cron/kanban/gateway work is on hold; in-flight work finishes normally. Use `/pause off` to resume."
 
   queue:
@@ -865,7 +865,7 @@ gateway:
     task_status_complete: "complete"
     task_status_error: "error"
     task_line: "- {title} - {status}"
-    task_card_title: "Hermes is working"
+    task_card_title: "Working on it"
     quiet_working: "Working on it…"
 
   pairing:
@@ -877,7 +877,7 @@ gateway:
   shutdown:
     action_shutting_down: "shutting down"
     action_restarting: "restarting"
-    cron_interrupted: "⚠️ Scheduled job '{job}' was cut short because Hermes is {action}; no result this run. It will run again on schedule, or run it now with `hermes cron run {job}` once Hermes is back."
+    cron_interrupted: "⚠️ Scheduled job '{job}' was cut short because I am {action}; no result this run. It will run again on schedule, or run it now with `hermes cron run {job}` once I am back."
     notice_shutdown: "⚠️ Hermes is shutting down — your current task will be interrupted. When it is back online, send any message and I'll try to pick up where we left off."
     notice_restart: "⚠️ Hermes is restarting — your current task will be interrupted. Send any message after the restart and I'll try to resume where you left off."
 
@@ -1051,7 +1051,7 @@ platform:
   discord:
     # Exec-approval card / slash-confirm card. Button labels ≤ 80 chars; embed titles ≤ 256.
     approval:
-      question: "Do you want Hermes to run this command?"
+      question: "Do you want me to run this command?"
       requested_command_label: "Requested command:"
       confirm_title: "Confirm"
       already_resolved: "This approval has already been resolved~"
@@ -1074,7 +1074,8 @@ platform:
     # Clarify / update prompts (embed titles + content headers + button labels + footers).
     prompt:
       truncated_marker: "... [truncated]"
-      clarify_title: "Hermes needs your input"
+      clarify_title: "Quick question"
+      clarify_title_named: "{name} needs your input"
       clarify_hint_buttons: "Pick one below, or click ✏️ Other to type a custom answer."
       clarify_hint_text: "Reply in this channel with your answer."
       default_hint: " (default: {default})"
@@ -1127,7 +1128,7 @@ platform:
         description: "Start a new conversation"
         followup: "New conversation started~"
       reset:
-        description: "Reset your Hermes session"
+        description: "Start this conversation over"
         followup: "Session reset~"
       model:
         description: "Show or change the model"
@@ -1149,10 +1150,10 @@ platform:
       undo:
         description: "Remove the last exchange"
       status:
-        description: "Show Hermes session status"
+        description: "Show the status of this conversation"
         followup: "Status sent~"
       stop:
-        description: "Stop the running Hermes agent"
+        description: "Stop what I am doing now"
         followup: "Stop requested~"
       steer:
         description: "Inject a message after the next tool call (no interrupt)"
@@ -1188,7 +1189,7 @@ platform:
       update:
         followup: "Update initiated~"
       restart:
-        description: "Gracefully restart the Hermes gateway"
+        description: "Restart the bot"
         followup: "Restart requested~"
       approve:
         arg_scope: "Optional: 'all', 'session', 'always', 'all session', 'all always'"
@@ -1196,9 +1197,9 @@ platform:
         description: "Deny a pending dangerous command"
         arg_scope: "Optional: 'all' to deny all pending commands"
       thread:
-        description: "Create a new thread and start a Hermes session in it"
+        description: "Create a new thread and start a conversation in it"
         arg_name: "Thread name"
-        arg_message: "Optional first message to send to Hermes in the thread"
+        arg_message: "Optional first message for the thread"
         arg_auto_archive: "Auto-archive in minutes (60, 1440, 4320, 10080)"
         error_unknown: "unknown error"
         failed: "Failed to create thread: {error}"
@@ -1221,7 +1222,7 @@ platform:
         arg_question: "The side question to answer without interrupting"
         followup: "Side question dispatched~"
       skill:
-        description: "Run a Hermes skill"
+        description: "Run a skill"
         arg_name: "Which skill to run"
         arg_args: "Optional arguments for the skill"
         unknown: "Unknown skill: `{name}`. Start typing for autocomplete suggestions."
@@ -1241,10 +1242,10 @@ platform:
     security:
       unauthorized_slash_alert: "⚠️ Unauthorized Discord slash attempt\nUser: {user_name} ({user_id})\nChannel: {chan_id} (guild {guild_id})\nCommand: {command_text}\nReason: {reason}"
     thread:
-      seed_message: "🧵 Thread created by Hermes: **{name}**"
-      default_name: "Hermes"
-      handoff_seed: "🧵 Hermes handoff: **{name}**"
-      auto_create_failed: "⚠️ Hermes could not create a Discord thread for this message, so the request was not processed. Please retry."
+      seed_message: "🧵 New thread: **{name}**"
+      default_name: "New chat"
+      handoff_seed: "🧵 Handoff: **{name}**"
+      auto_create_failed: "⚠️ I could not open a thread for this message, so I did not see your request. Please send it again."
       auto_create_failed_generic: "The request was not processed. Please retry."
     media:
       upload_too_large: "⚠️ Could not attach `{filename}` — {size_mb} MB exceeds Discord's {limit_mb} MB upload limit for this channel. Compress the file or share a link instead."

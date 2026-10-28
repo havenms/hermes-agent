@@ -1028,6 +1028,7 @@ platform:
     prompt:
       truncated_marker: "... [обрезано]"
       clarify_title: "Hermes нужен ваш ответ"
+      clarify_title_named: "{name} нужен ваш ответ"
       clarify_hint_buttons: "Выберите вариант ниже или нажмите ✏️ Другое, чтобы ввести свой ответ."
       clarify_hint_text: "Ответьте в этом канале."
       default_hint: " (по умолчанию: {default})"

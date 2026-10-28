@@ -5827,7 +5827,7 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
         def _build(_channel):
             # Header-only card (same rule as the exec approval prompt): the question and hint live
             # in content only, so embed-rendering clients don't see them twice (#114693).
-            clarify_title = t("platform.discord.prompt.clarify_title")
+            clarify_title = self._clarify_card_title(_channel)
             embed = discord.Embed(
                 title=_truncate_discord_component_text(f"❓ {clarify_title}", _DISCORD_EMBED_TITLE_LIMIT), color=discord.Color.orange())
             # 5 buttons × 5 rows = 25; one slot is reserved for "Other".
@@ -5854,6 +5854,26 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
 
     # A secret prompt's button view outlives no prompt: retired by the gateway, capped at a day.
     _SECRET_PROMPT_VIEW_MAX_S = 86400
+
+    def _clarify_card_title(self, channel=None) -> str:
+        """Card header with the bot's own display name ("Diana needs your input").
+
+        The guild nickname wins over the account name. With no name, the header is the
+        neutral "Quick question". The product name never shows on a client card.
+        """
+        name = ""
+        try:
+            me = getattr(getattr(channel, "guild", None), "me", None)
+            name = str(getattr(me, "display_name", "") or "")
+            if not name:
+                user = getattr(getattr(self, "_client", None), "user", None)
+                name = str(getattr(user, "display_name", None) or getattr(user, "name", "") or "")
+        except Exception:
+            name = ""
+        name = name.strip()
+        if name:
+            return t("platform.discord.prompt.clarify_title_named", name=name)
+        return t("platform.discord.prompt.clarify_title")
 
     def _secret_prompt_view(self, clarify_id: str) -> tuple[str, Any]:
         """``(hint, view)`` for an open-ended clarify card: a private-entry button for a secret

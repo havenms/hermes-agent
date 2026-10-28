@@ -1028,6 +1028,7 @@ platform:
     prompt:
       truncated_marker: "... [afgekap]"
       clarify_title: "Hermes het jou insette nodig"
+      clarify_title_named: "{name} het jou insette nodig"
       clarify_hint_buttons: "Kies een hieronder, of klik ✏️ Ander om 'n eie antwoord te tik."
       clarify_hint_text: "Antwoord in hierdie kanaal met jou antwoord."
       default_hint: " (verstek: {default})"

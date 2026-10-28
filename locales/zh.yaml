@@ -1028,6 +1028,7 @@ platform:
     prompt:
       truncated_marker: "... [已截断]"
       clarify_title: "Hermes 需要你的输入"
+      clarify_title_named: "{name} 需要你的回复"
       clarify_hint_buttons: "从下方选择一项，或点击 ✏️ 其他 输入自定义回答。"
       clarify_hint_text: "请在此频道回复你的答案。"
       default_hint: " （默认：{default}）"

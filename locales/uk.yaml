@@ -1028,6 +1028,7 @@ platform:
     prompt:
       truncated_marker: "... [скорочено]"
       clarify_title: "Hermes потребує вашої відповіді"
+      clarify_title_named: "{name} потрібна ваша відповідь"
       clarify_hint_buttons: "Виберіть варіант нижче або натисніть ✏️ Інше, щоб ввести власну відповідь."
       clarify_hint_text: "Надішліть відповідь у цьому каналі."
       default_hint: " (за замовчуванням: {default})"

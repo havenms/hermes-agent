@@ -1028,6 +1028,7 @@ platform:
     prompt:
       truncated_marker: "... [잘림]"
       clarify_title: "Hermes가 입력을 기다리고 있어요"
+      clarify_title_named: "{name}에게 답변이 필요합니다"
       clarify_hint_buttons: "아래에서 하나를 고르거나, ✏️ 기타를 눌러 직접 답변을 입력하세요."
       clarify_hint_text: "이 채널에 답변을 남겨 주세요."
       default_hint: " (기본값: {default})"

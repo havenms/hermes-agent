@@ -1028,6 +1028,7 @@ platform:
     prompt:
       truncated_marker: "... [مقتطع]"
       clarify_title: "Hermes يحتاج إلى ردّك"
+      clarify_title_named: "{name} يحتاج إلى ردك"
       clarify_hint_buttons: "اختر أحد الخيارات أدناه، أو اضغط ✏️ أخرى لكتابة إجابة مخصصة."
       clarify_hint_text: "أجب في هذه القناة بردّك."
       default_hint: " (افتراضي: {default})"

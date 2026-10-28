@@ -1028,6 +1028,7 @@ platform:
     prompt:
       truncated_marker: "... [truncado]"
       clarify_title: "Hermes necesita tu respuesta"
+      clarify_title_named: "{name} necesita tu respuesta"
       clarify_hint_buttons: "Elige una opción abajo o haz clic en ✏️ Otra para escribir una respuesta personalizada."
       clarify_hint_text: "Responde en este canal con tu respuesta."
       default_hint: " (predeterminado: {default})"

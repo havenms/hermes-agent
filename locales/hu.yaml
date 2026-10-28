@@ -1045,6 +1045,7 @@ platform:
     prompt:
       truncated_marker: "... [csonkolva]"
       clarify_title: "A Hermes a válaszodra vár"
+      clarify_title_named: "{name} választ vár tőled"
       clarify_hint_buttons: "Válassz lentről, vagy kattints az ✏️ Egyéb gombra saját válaszhoz."
       clarify_hint_text: "Válaszolj ebben a csatornában."
       default_hint: " (alapértelmezett: {default})"
