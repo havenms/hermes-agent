@@ -242,6 +242,8 @@ def build_gateway_parser(
             "Optional — without it the gateway still drains whenever it next "
             "reconnects on its own.")
     gateway_enroll.set_defaults(func=cmd_gateway_enroll)
+    from hermes_cli.gateway_inject import add_inject_parser
+    add_inject_parser(gateway_subparsers)  # TAPAS: takeover page "Done" -> the conversation
 
     # proxy: local OpenAI-compatible proxy attaching the user's OAuth provider credentials,
     # so external apps (Open WebUI, Karakeep, ...) ride a logged-in subscription.

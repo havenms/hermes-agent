@@ -364,6 +364,9 @@ async def _start_gateway_start_control_socket(runner):
                            # live adapters' handlers (#87770); tools/prompt still wait for the next session.
                            "reload-plugins": reload_plugins_verb(runner, _main_loop)})
         _control_server.ticket_store = runner.session_ticket_store
+        # TAPAS: local, same-user injection of a client message (takeover page "Done").
+        from gateway.run_inject_verb import inject_message_verb
+        _control_server.private_handlers["inject-message"] = inject_message_verb(runner, _main_loop)
         # The Webapp's verbs answer from the socket's first moment ("starting" until the listener
         # settles): a client polling a restarting gateway must never read "unknown verb" as a failure.
         from gateway.webapp_listener import register_control_verbs
