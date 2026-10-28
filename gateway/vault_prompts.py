@@ -65,7 +65,15 @@ WRONG_LOGIN_LINE = "Wrong email or username? Just tell me."
 # How many times one save_login may go back to the email or username card.
 MAX_IDENTIFIER_REDO = 3
 
-CODE_PATTERN = r"(?=.{4,})(?=[^0-9]*[0-9])[A-Za-z0-9]{1,8}(?:[ -]?[A-Za-z0-9]{1,8}){0,2}"  # 123456, 123 456, G-123456
+# A one-time code: 4 to 8 digits (an optional space or dash in the middle: "123 456", "123-456"),
+# or one letter-and-digit token of 6 to 8 characters ("AB12CD"), or two letter-and-digit groups of 3
+# or 4 ("X7K-9PQ"), with at least 2 digits. Chat such as "wait 5 min", "1 sec" or "give me 2" never
+# matches.
+CODE_PATTERN = (r"(?:[A-Za-z]{1,3}-)?(?:\d{4,8}|\d{3,4}[ -]\d{3,4})"
+                r"|(?=[A-Za-z0-9]{6,8}$)(?=(?:[^0-9]*[0-9]){2})(?=.*[A-Za-z])"
+                r"(?!(?i:.*(?:min|sec|hr|hour|wait|give|later|soon)))[A-Za-z0-9]{6,8}"
+                r"|(?=(?:[^0-9]*[0-9]){2})(?=.*[A-Za-z])(?!(?i:.*(?:min|sec|hr|hour|wait|give|later|soon)))"
+                r"[A-Za-z0-9]{3,4}[ -][A-Za-z0-9]{3,4}")
 
 
 def vault_prompt_timeout(kind: str) -> float:
