@@ -183,3 +183,104 @@ def build_secret_prompt_view(discord, base, *, unauthorized):
                 self.on_closed()
 
     return SecretPromptView
+
+
+def build_held_reply_view(discord, base, *, unauthorized):
+    """Return the ``HeldReplyView`` class: the two buttons on a held reply to a password card.
+
+    The gateway holds a typed reply that is not clearly a password (``tools.clarify_gateway``
+    ``hold_reply``). "Yes, that was my password" answers the card with it. "No, that was a message"
+    releases it to the agent as normal chat. Only the asking user may press them. A typed "yes"
+    never counts: the buttons are the only way to use a held reply."""
+
+    class HeldReplyView(base):
+        def __init__(self, hold_id: str, owner_user_id: Optional[str], allowed_user_ids: set,
+                     allowed_role_ids: Optional[set] = None, *, timeout: Optional[float] = None,
+                     on_used=None):
+            super().__init__(allowed_user_ids, allowed_role_ids, timeout=timeout)
+            self.hold_id = hold_id
+            self.owner_user_id = str(owner_user_id) if owner_user_id else None
+            self.on_used = on_used  # the adapter's hook to retire the password card
+            yes = discord.ui.Button(label=t("platform.discord.prompt.held_reply_yes"),
+                                    style=discord.ButtonStyle.primary, custom_id=f"vault-held-yes:{hold_id}")
+            no = discord.ui.Button(label=t("platform.discord.prompt.held_reply_no"),
+                                   style=discord.ButtonStyle.secondary, custom_id=f"vault-held-no:{hold_id}")
+            yes.callback = self._on_yes
+            no.callback = self._on_no
+            self.add_item(yes)
+            self.add_item(no)
+
+        async def _ephemeral(self, interaction, text: str) -> None:
+            try:
+                await interaction.response.send_message(text, ephemeral=True)
+            except Exception:  # health: allow BLE001 -- an expired interaction token must not break the view
+                logger.debug("Discord held reply: ephemeral reply failed (hold=%s)", self.hold_id, exc_info=True)
+
+        def _responder(self, interaction) -> str:
+            return str(getattr(getattr(interaction, "user", None), "id", "") or "")
+
+        async def _on_yes(self, interaction) -> None:
+            await self._answer(interaction, use=True)
+
+        async def _on_no(self, interaction) -> None:
+            await self._answer(interaction, use=False)
+
+        async def _answer(self, interaction, *, use: bool) -> None:
+            from tools import clarify_gateway as clarify_mod
+            if not self._check_auth(interaction):
+                await self._ephemeral(interaction, unauthorized())
+                return
+            if self.resolved:
+                await self._ephemeral(interaction, t("platform.discord.prompt.clarify_already_answered"))
+                return
+            outcome, held = clarify_mod.answer_held_reply(self.hold_id, use, responder_id=self._responder(interaction))
+            logger.info("Discord held reply button (hold=%s, use=%s, outcome=%s)", self.hold_id, use, outcome)
+            if outcome == clarify_mod.HOLD_NOT_OWNER:
+                await self._ephemeral(interaction, t("platform.discord.prompt.secret_not_owner"))
+                return
+            if outcome == clarify_mod.HOLD_GONE:
+                await self._ephemeral(interaction, t("platform.discord.prompt.clarify_already_answered"))
+                await self.close(t("platform.discord.prompt.held_reply_closed"), discord.Color.greyple())
+                return
+            if outcome == clarify_mod.HOLD_PROMPT_CLOSED:
+                await self._ephemeral(interaction, t("platform.discord.prompt.held_reply_prompt_closed"))
+                await self.close(t("platform.discord.prompt.held_reply_closed"), discord.Color.greyple())
+                return
+            if outcome == clarify_mod.HOLD_USED:
+                await self._ephemeral(interaction, t("platform.discord.prompt.secret_received"))
+                await self.close(t("gateway.clarify.answered_secret"), discord.Color.green())
+                if callable(self.on_used) and held is not None:
+                    try:
+                        await self.on_used(held.clarify_id)
+                    except Exception:  # health: allow BLE001 -- the card stamp is cosmetic
+                        logger.debug("Discord held reply: retire of the password card failed", exc_info=True)
+                return
+            await self._ephemeral(interaction, t("platform.discord.prompt.held_reply_released"))
+            await self.close(t("platform.discord.prompt.held_reply_released_footer"), discord.Color.greyple())
+            if held is not None and callable(held.release):
+                try:
+                    result = held.release()
+                    if hasattr(result, "__await__"):
+                        await result
+                except Exception:  # health: allow BLE001 -- a failed release only drops the message
+                    logger.warning("Discord held reply: release as chat failed (hold=%s)", self.hold_id)
+
+        async def close(self, footer: str, color) -> None:
+            if self.resolved:
+                return
+            self.resolved = True
+            self._disable_all()
+            msg = self._message
+            try:
+                if msg is not None:
+                    embed = self._first_embed(msg)
+                    if embed:
+                        embed.color = color
+                        embed.set_footer(text=footer)
+                    await msg.edit(embed=embed, view=self)
+            except Exception:  # health: allow BLE001 -- message deleted or too old to edit
+                logger.debug("Discord held reply: card edit failed (hold=%s)", self.hold_id, exc_info=True)
+            finally:
+                self.stop()
+
+    return HeldReplyView

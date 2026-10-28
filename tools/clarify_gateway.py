@@ -69,40 +69,170 @@ TEXT_REJECTED_SELECTION = "rejected_selection"
 TEXT_NO_PENDING = "no_pending"
 TEXT_NOT_OWNER = "not_owner"
 TEXT_NOT_AN_ANSWER = "not_an_answer"
-TEXT_LOOKS_LIKE_CHAT = "looks_like_chat"
+TEXT_LOOKS_LIKE_CHAT = "looks_like_chat"  # kept for callers; the gateway now holds such a reply
+# A typed reply to a password card that is not clearly a password: the gateway holds it in memory
+# (see :func:`hold_reply`) and asks with two buttons whether it was the password.
+TEXT_HELD = "held"
+# A typed "yes" or "no" while a held reply waits for its buttons: never the password, never chat.
+TEXT_HOLD_PENDING = "hold_pending"
 
 # After this many seconds a typed password reply must be one token: a client who comes back
 # hours later usually types chat first.
 CHAT_GUARD_STALE_AFTER_S = 15 * 60
 _CHAT_OPENERS = ("hi", "hey", "hello", "ok", "okay", "thanks", "did", "is", "are", "can", "what",
                  "why", "how", "when", "where", "any update", "still")
+# One-word chat replies. Never a password, whatever the card asks.
+CHAT_WORDS = frozenset({
+    "yes", "yep", "yeah", "yea", "ya", "yup", "y", "no", "nope", "nah", "n", "ok", "okay", "k", "kk",
+    "hi", "hey", "hello", "thanks", "thank you", "thx", "ty", "sure", "done", "wait", "sorry", "lol",
+    "great", "cool", "nice", "good", "fine", "please", "help", "what", "why", "how", "hmm", "huh",
+    "correct", "right", "true", "false", "agreed", "confirm", "confirmed", "sent", "there", "here",
+})
+_YES_NO_WORDS = frozenset({"yes", "yep", "yeah", "yea", "ya", "yup", "y", "no", "nope", "nah", "n",
+                           "yes it is", "yes it was", "no it is not", "no it was not", "it was", "it is"})
+
+
+def _norm_word(text: str) -> str:
+    return " ".join(str(text or "").casefold().replace("\u2019", "'").split()).strip(".!?,")
 
 
 def looks_like_chat(text: str, *, stale: bool = False) -> bool:
     """True when a typed reply to a password prompt reads like a chat message, not a password:
-    3 or more words, a "?", or a common opener. ``stale`` (the card is older than
-    ``CHAT_GUARD_STALE_AFTER_S``) accepts only a reply without whitespace. A passphrase with
-    spaces still goes through the private form, which skips this check."""
+    3 or more words, a "?" in a reply with a space, a one-word chat reply, or a common opener.
+    ``stale`` (the card is older than ``CHAT_GUARD_STALE_AFTER_S``) also flags any reply with
+    whitespace. A single token with "?" ("Summer2024?") is a normal password."""
     stripped = str(text or "").strip()
     if not stripped:
         return False
-    if stale and any(ch.isspace() for ch in stripped):
+    has_space = any(ch.isspace() for ch in stripped)
+    if stale and has_space:
         return True
     lowered = stripped.casefold()
-    if "?" in stripped or len(stripped.split()) >= 3:
+    if ("?" in stripped and has_space) or len(stripped.split()) >= 3:
         return True
-    return any(lowered == w or lowered.startswith(w + " ") or lowered.startswith(w + ",")
+    if _norm_word(stripped) in CHAT_WORDS or _norm_word(stripped) in _CHAT_OPENERS:
+        return True
+    return any(lowered.startswith(w + " ") or lowered.startswith(w + ",")
                or lowered.startswith(w + "!") or lowered.startswith(w + ".") for w in _CHAT_OPENERS)
+
+
+_EMAIL_SHAPE = re.compile(r"[^@\s]+@[^@\s]+\.[A-Za-z]{2,}")
+_TRAILING_PUNCT = ".!?,"
+
+
+def looks_like_secret(text: str) -> bool:
+    """True when a typed reply to a password card is clearly a password, so the gateway may use it
+    without asking. One token of 6 to 256 characters, not a chat word, not an email or a link,
+    with a letter and a digit or an inner symbol ("Summer2024?", "pa$$word"). Anything else is held
+    and the client confirms it with a button."""
+    s = str(text or "").strip()
+    if not s or any(ch.isspace() for ch in s) or not 6 <= len(s) <= 256:
+        return False
+    if _norm_word(s) in CHAT_WORDS or _EMAIL_SHAPE.fullmatch(s) or "://" in s or s.casefold().startswith("www."):
+        return False
+    core = s.rstrip(_TRAILING_PUNCT) or s
+    has_letter = any(ch.isalpha() for ch in s)
+    has_digit = any(ch.isdigit() for ch in s)
+    inner_symbol = any(not ch.isalnum() and ch != "'" for ch in core)
+    return has_letter and (has_digit or inner_symbol)
+
+
+# --- Held replies -------------------------------------------------------------------------------
+# A typed reply to a password card that is not clearly a password. The gateway keeps it here, in
+# memory only: it is not logged, not passed to the model and not added to history. Two buttons
+# decide: "Yes, that was my password" answers the card with it; "No, that was a message" releases
+# it to the agent as normal chat (``release``, set by the gateway). A typed "yes" never uses it.
+HELD_REPLY_MAX_AGE_S = 4 * 3600
+
+
+@dataclass
+class HeldReply:
+    hold_id: str
+    clarify_id: str
+    session_key: str
+    owner_user_id: Optional[str]
+    text: str = field(repr=False)
+    release: Optional[Callable[[], object]] = field(default=None, repr=False)
+    created_at: float = field(default_factory=time.monotonic)
+
+
+_held: dict[str, HeldReply] = {}
+HOLD_USED = "used"
+HOLD_RELEASED = "released"
+HOLD_PROMPT_CLOSED = "prompt_closed"
+HOLD_GONE = "gone"
+HOLD_NOT_OWNER = "not_owner"
+
+
+def _drop_old_holds_locked() -> None:
+    now = time.monotonic()
+    for hid in [h for h, r in _held.items() if now - r.created_at > HELD_REPLY_MAX_AGE_S]:
+        _held.pop(hid, None)
+
+
+def hold_reply(entry: "_ClarifyEntry", text: str, release: Optional[Callable[[], object]] = None) -> str:
+    """Keep a typed reply to ``entry`` in memory until its buttons decide; returns the hold id."""
+    import uuid
+    hold_id = uuid.uuid4().hex[:16]
+    with _lock:
+        _drop_old_holds_locked()
+        _held[hold_id] = HeldReply(hold_id, entry.clarify_id, entry.session_key, entry.owner_user_id,
+                                   str(text), release)
+    return hold_id
+
+
+def has_open_hold(clarify_id: str) -> bool:
+    with _lock:
+        _drop_old_holds_locked()
+        return any(r.clarify_id == clarify_id for r in _held.values())
+
+
+def get_hold(hold_id: str) -> Optional[HeldReply]:
+    with _lock:
+        _drop_old_holds_locked()
+        return _held.get(hold_id)
+
+
+def answer_held_reply(hold_id: str, use: bool, responder_id: Optional[str] = None) -> tuple[str, Optional[HeldReply]]:
+    """The owner's button on a held reply. ``use=True`` answers the password card with the held text
+    (``HOLD_USED``, or ``HOLD_PROMPT_CLOSED`` when the card already ended: the text is dropped).
+    ``use=False`` returns ``HOLD_RELEASED`` with the hold: the caller runs ``hold.release()``."""
+    with _lock:
+        _drop_old_holds_locked()
+        held = _held.get(hold_id)
+        if held is None:
+            return HOLD_GONE, None
+        if held.owner_user_id and str(responder_id or "") != held.owner_user_id:
+            return HOLD_NOT_OWNER, None
+        _held.pop(hold_id, None)
+    if not use:
+        return HOLD_RELEASED, held
+    entry = get_pending(held.clarify_id)
+    if entry is None:
+        return HOLD_PROMPT_CLOSED, None
+    coerced, _reason = _coerce_text_response_detailed(entry, held.text)
+    ok = coerced is not None and resolve_gateway_clarify(held.clarify_id, coerced)
+    return (HOLD_USED, held) if ok else (HOLD_PROMPT_CLOSED, None)
+
+
+def drop_holds_for_session(session_key: str) -> int:
+    with _lock:
+        ids = [h for h, r in _held.items() if r.session_key == session_key]
+        for h in ids:
+            _held.pop(h, None)
+    return len(ids)
+
+
 SKIP_WORD = "skip"
 # Typed words that decline a prompt bound to one user (vault prompts). The cards say "just tell
 # me" instead of teaching a command; these keep working without being shown.
 DECLINE_WORDS = frozenset({"skip", "wrong", "cancel", "stop", "wrong email", "wrong username", "that's wrong",
                            "thats wrong", "it's wrong", "its wrong"})
-
-
 def _is_decline(entry: "_ClarifyEntry", text: str) -> bool:
-    word = " ".join(str(text or "").casefold().replace("\u2019", "'").split()).rstrip(".!")
+    word = _norm_word(text)
     return word == SKIP_WORD or (entry.owner_user_id is not None and word in DECLINE_WORDS)
+
+
 SKIPPED = "\x00skipped"
 # Marks a response that came from one private form (see ``_ClarifyEntry.form_fields``).
 FORM_ANSWER_PREFIX = "\x00form:"
@@ -367,9 +497,13 @@ def _attempt_text_response(entry: _ClarifyEntry, response: str, responder_id: Op
     if not may_answer(entry, responder_id):
         return TEXT_NOT_OWNER
     text = str(response).strip()
-    if (entry.chat_guard and not private_form and not _is_decline(entry, text)
-            and looks_like_chat(text, stale=time.monotonic() - entry.created_at > CHAT_GUARD_STALE_AFTER_S)):
-        return TEXT_LOOKS_LIKE_CHAT
+    if entry.chat_guard and not private_form and not _is_decline(entry, text):
+        # A password card takes a typed reply only when it is clearly a password. Anything else is
+        # held by the gateway and the client confirms with a button. A typed "yes" never counts.
+        if has_open_hold(entry.clarify_id) and _norm_word(text) in _YES_NO_WORDS:
+            return TEXT_HOLD_PENDING
+        if not looks_like_secret(text):
+            return TEXT_HELD
     coerced, reason = _coerce_text_response_detailed(entry, response)
     if coerced is None:
         if reason == "not_an_answer":
@@ -421,6 +555,8 @@ def clear_session(session_key: str) -> int:
             entry.response = CANCELLED
             entry.event.set()
             cancelled += 1
+        for hid in [h for h, r in _held.items() if r.session_key == session_key]:
+            _held.pop(hid, None)
     return cancelled
 
 

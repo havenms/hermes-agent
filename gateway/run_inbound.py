@@ -46,6 +46,10 @@ if TYPE_CHECKING:  # string annotations only; never imported at runtime (cycle)
 # Log-record parity with the origin module.
 logger = logging.getLogger("gateway.run")
 
+# Event metadata key: route this message as chat even while a prompt is open (a held reply the
+# client released, the takeover page's "done").
+CLARIFY_BYPASS_KEY = "tapas_clarify_bypass"
+
 
 def discord_triggering_note(message_id: Any) -> str:
     """Model-facing routing note for a Discord turn (rides the API-bound user message only)."""
@@ -368,6 +372,10 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
             return None
         if _pending_clarify is None:
             return None
+        if (event.metadata or {}).get(CLARIFY_BYPASS_KEY):
+            # A held reply the client released as chat ("No, that was a message"), or the takeover
+            # page's fixed "done": never an answer to the open card.
+            return None
         _responder_id = getattr(source, "user_id", None)
         if not _clarify_mod.may_answer(_pending_clarify, _responder_id):
             # A vault prompt asks one user. In a shared session (a Discord thread) another member's
@@ -430,17 +438,14 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
             return ""
         if _text_outcome == _clarify_mod.TEXT_NOT_OWNER:
             return None  # an older owner-bound entry took the slot between the check and the attempt
-        if _text_outcome == _clarify_mod.TEXT_LOOKS_LIKE_CHAT:
-            # A typed reply to a password prompt that reads like chat ("hey did that work?"). Never
-            # take it as the password and never delete it. Ask, keep the prompt open, and let the
-            # message continue as normal chat: while an owner-bound prompt waits, busy routing
-            # queues it instead of interrupting the turn (run_busy), so the prompt survives.
-            logger.info("Gateway kept a password prompt open: the typed reply reads like chat "
-                        "(session=%s, id=%s)", _quick_key, _pending_clarify.clarify_id)
+        if _text_outcome == _clarify_mod.TEXT_HOLD_PENDING:
+            # A typed "yes" or "no" while a held reply waits for its buttons. Never the password.
             _clarify_adapter = self._delivery_adapter_for(source)
             if _clarify_adapter:
-                await self._send_unanchored_notice(_clarify_adapter, source, t("gateway.clarify.is_that_your_password"))
-            return None
+                await self._send_unanchored_notice(_clarify_adapter, source, t("gateway.clarify.held_reply_use_buttons"))
+            return _retain("a typed yes or no while a held reply waits for its buttons")
+        if _text_outcome == _clarify_mod.TEXT_HELD:
+            return await self._hold_password_reply(_clarify_mod, _pending_clarify, event, source, _raw_clarify_reply)
         if _text_outcome == _clarify_mod.TEXT_NOT_AN_ANSWER:
             # The reply does not look like the requested value (a chat message after a long wait,
             # not a code or a username). Keep the prompt open and say so. On a secret prompt the
@@ -474,6 +479,45 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
                     except Exception:
                         logger.debug("Failed to retire clarify card after prose cancellation", exc_info=True)
         return None
+
+    async def _hold_password_reply(self, clarify_mod, entry, event, source, text: str) -> str:
+        """Hold a typed reply to a password card that is not clearly a password.
+
+        The text stays in memory only (``tools.clarify_gateway.hold_reply``): it is not logged, not
+        passed to the model and not added to history. The gateway deletes the message when it can,
+        then posts a card with two buttons. "Yes, that was my password" answers the card with the
+        held text. "No, that was a message" releases it to the agent as normal chat. A surface with
+        no buttons keeps the text back and asks the client to send it again after the login."""
+        adapter = self._delivery_adapter_for(source)
+
+        async def _release() -> None:
+            event.metadata = dict(event.metadata or {})
+            event.metadata[CLARIFY_BYPASS_KEY] = True
+            target = self._delivery_adapter_for(source)
+            if target is not None:
+                await target.handle_message(event)
+
+        hold_id = clarify_mod.hold_reply(entry, text, release=_release)
+        logger.info("Gateway held a typed reply to a password card until the client confirms it "
+                    "(session=%s, id=%s, hold=%s)", entry.session_key, entry.clarify_id, hold_id)
+        if adapter is None:
+            return ""
+        await self._scrub_secret_reply(adapter, source, event)
+        sent = False
+        if callable(getattr(type(adapter), "send_held_reply_card", None)):
+            try:
+                metadata = self._thread_metadata_for_target(
+                    source.platform, source.chat_id, source.thread_id, chat_type=source.chat_type)
+                result = await adapter.send_held_reply_card(
+                    source.chat_id, hold_id, entry.owner_user_id, entry.clarify_id, metadata=metadata)
+                sent = bool(getattr(result, "success", False))
+            except Exception:
+                logger.debug("Failed to send the held-reply card", exc_info=True)
+        if not sent:
+            # No buttons here: the text is never used as the password and never sent on as chat.
+            clarify_mod.answer_held_reply(hold_id, use=False, responder_id=entry.owner_user_id)
+            await self._send_unanchored_notice(adapter, source, t("gateway.clarify.held_reply_no_buttons"))
+        return ""
 
     async def _scrub_secret_reply(self, adapter, source, event) -> None:
         """Delete the user's message that carried a secret, now that it has been read.

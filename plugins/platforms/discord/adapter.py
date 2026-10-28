@@ -5904,6 +5904,33 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
         key = "secret_hint_password" if entry.kind in ("save_login", "unlock") and asks_password else "secret_hint"
         return t(f"platform.discord.prompt.{key}"), view
 
+    async def send_held_reply_card(
+        self, chat_id: str, hold_id: str, owner_user_id: Optional[str], clarify_id: str,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> SendResult:
+        """Two buttons on a typed reply the gateway held while a password card is open: "Yes, that
+        was my password" or "No, that was a message". The card never shows the held text, and it
+        names the 🔒 Enter privately button as the main route."""
+        view_cls = globals().get("HeldReplyView")
+        if view_cls is None:
+            return SendResult(success=False, error="Discord views unavailable")
+
+        async def _retire(cid: str) -> None:
+            await self.retire_clarify_card(cid, t("gateway.clarify.answered_secret"))
+
+        def _build(_channel):
+            title = self._clarify_card_title(_channel)
+            embed = discord.Embed(
+                title=_truncate_discord_component_text(f"🔐 {title}", _DISCORD_EMBED_TITLE_LIMIT),
+                color=discord.Color.orange())
+            view = view_cls(hold_id=hold_id, owner_user_id=owner_user_id,
+                            allowed_user_ids=self._allowed_user_ids, allowed_role_ids=self._allowed_role_ids,
+                            timeout=self._SECRET_PROMPT_VIEW_MAX_S, on_used=_retire)
+            content = self._self_contained_prompt_content(
+                f"🔐 **{title}**", t("gateway.clarify.held_reply_card"), tail="")
+            return {"content": content, "embed": embed, "view": view}, view
+        return await self._send_prompt(chat_id, metadata, _build, fail_log="send_held_reply_card")
+
     async def retire_clarify_card(self, clarify_id: str, notice: str) -> None:
         """Close a secret prompt's button when the prompt ends without the modal (typed answer,
         timeout, /stop, run end). Other clarify cards keep their own lifecycle: a no-op for them."""
@@ -6470,7 +6497,7 @@ def _define_discord_view_classes() -> None:
     """Register Discord UI view classes as module globals.
     Called at module load and after a lazy install so the classes exist whenever DISCORD_AVAILABLE."""
     global ExecApprovalView, SlashConfirmView, UpdatePromptView, ModelPickerView, ClarifyChoiceView, ChoicePickerView
-    global SecretPromptView
+    global SecretPromptView, HeldReplyView
 
     class _HermesView(discord.ui.View):
         """Shared plumbing for Hermes component views: allowlist auth, single-use
@@ -6558,8 +6585,9 @@ def _define_discord_view_classes() -> None:
             await self._expire_embed(t("platform.discord.prompt.expired_footer"))
 
     ExecApprovalView = build_exec_approval_view(discord, _HermesView, unauthorized=_unauthorized)
-    from plugins.platforms.discord.adapter_secret_prompt_view import build_secret_prompt_view
+    from plugins.platforms.discord.adapter_secret_prompt_view import build_held_reply_view, build_secret_prompt_view
     SecretPromptView = build_secret_prompt_view(discord, _HermesView, unauthorized=_unauthorized)
+    HeldReplyView = build_held_reply_view(discord, _HermesView, unauthorized=_unauthorized)
 
     class SlashConfirmView(_HermesView):
         """Approve Once / Always Approve / Cancel for slash-command confirmations (``/reload-mcp``,

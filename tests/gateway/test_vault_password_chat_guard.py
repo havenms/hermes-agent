@@ -1,8 +1,8 @@
 """A typed reply to a password prompt that reads like chat is never used as the password.
 
 With a 4-hour wait, a client who comes back and types "hey did that work?" had that message saved
-as the password and deleted without a word. Now such a reply stays in the chat, the prompt stays
-open, the bot asks "Is that your password?", and the message continues as normal chat.
+as the password and deleted without a word. Round 4: a reply that is not clearly a password is held
+in memory and the client confirms it with a button (tests/gateway/test_vault_review_fixes.py).
 """
 
 import json
@@ -35,8 +35,10 @@ def _clean():
 
 @pytest.mark.parametrize("text, chat", [
     ("hey did that work?", True), ("ok", True), ("Thanks!", True), ("any update", True),
-    ("still waiting", True), ("is it done", True), ("pass?word", True), ("my new pass word", True),
+    ("still waiting", True), ("is it done", True), ("pass word?", True), ("my new pass word", True),
+    ("yes", True), ("nope", True),
     ("hunter2", False), ("Tr0ub4dor&3", False), ("correct horse", False), ("candle123", False),
+    ("Summer2024?", False), ("pass?word", False),
 ])
 def test_looks_like_chat(text, chat):
     assert cm.looks_like_chat(text) is chat
@@ -56,20 +58,20 @@ def _password_entry(cid="p1", age_s=0.0):
 
 def test_chat_is_not_consumed_and_the_prompt_stays_open():
     entry = _password_entry()
-    assert cm.attempt_text_response_for_session(KEY, "hey did that work?", OWNER) == cm.TEXT_LOOKS_LIKE_CHAT
+    assert cm.attempt_text_response_for_session(KEY, "hey did that work?", OWNER) == cm.TEXT_HELD
     assert not entry.event.is_set()
     assert cm.attempt_text_response_for_session(KEY, "hunter2", OWNER) == cm.TEXT_RESOLVED
     assert entry.response == "hunter2"
 
 
-def test_after_15_minutes_a_two_word_reply_is_asked_about():
+def test_a_two_word_reply_is_held_fresh_or_stale():
     entry = _password_entry(age_s=16 * 60)
-    assert cm.attempt_text_response_for_session(KEY, "correct horse", OWNER) == cm.TEXT_LOOKS_LIKE_CHAT
+    assert cm.attempt_text_response_for_session(KEY, "correct horse", OWNER) == cm.TEXT_HELD
     assert not entry.event.is_set()
     fresh = cm.register("p2", KEY + ":fresh", "password?", None, secret=True, owner_user_id=OWNER,
                         chat_guard=True, kind="save_login")
-    assert cm.attempt_text_response_for_session(KEY + ":fresh", "correct horse", OWNER) == cm.TEXT_RESOLVED
-    assert fresh.response == "correct horse"
+    assert cm.attempt_text_response_for_session(KEY + ":fresh", "correct horse", OWNER) == cm.TEXT_HELD
+    assert not fresh.event.is_set()
 
 
 def test_the_private_form_accepts_a_passphrase_with_spaces():
@@ -145,9 +147,8 @@ class _FellThrough(Exception):
 
 
 @pytest.mark.asyncio
-async def test_chat_on_a_password_card_is_kept_answered_and_routed_as_chat():
+async def test_chat_on_a_password_card_is_held_not_routed_and_not_used():
     from gateway.run import GatewayRunner
-    import tools.slash_confirm as slash_confirm_mod
     adapter = _Adapter()
     runner = GatewayRunner.__new__(GatewayRunner)
     runner._startup_restore_in_progress = False
@@ -156,21 +157,16 @@ async def test_chat_on_a_password_card_is_kept_answered_and_routed_as_chat():
     runner._session_key_for_source = lambda source: KEY
     runner._delivery_adapter_for = lambda source: adapter
     runner._update_prompt_pending = {}
+    runner._thread_metadata_for_target = lambda *a, **k: None
     entry = _password_entry()
     event = MessageEvent(text="hey did that work?", message_type=MessageType.TEXT, message_id="m-1",
                          source=SessionSource(platform=Platform.DISCORD, chat_id="777", chat_type="thread",
                                               user_id=OWNER, thread_id="777"))
-
-    def _tripwire(_key):
-        raise _FellThrough()
-
-    with patch("hermes_cli.plugins.invoke_hook", return_value=[]), \
-            patch.object(slash_confirm_mod, "get_pending", _tripwire), pytest.raises(_FellThrough):
-        await runner._handle_message(event)
+    assert await runner._hm_clarify_reply(event, event.source, KEY) == ""
     assert not entry.event.is_set(), "the prompt stays open"
-    assert adapter.deleted == [], "the chat message is left in place"
-    assert len(adapter.sent) == 1 and adapter.sent[0][1] is None
-    assert "Is that your password?" in adapter.sent[0][0]
+    assert adapter.deleted == ["m-1"], "the held message is deleted"
+    assert all("Is that your password?" not in text for text, _ in adapter.sent)
+    assert all(reply is None for _, reply in adapter.sent)
 
 
 # ── Discord card and tool results ──────────────────────────────────────────────────────────
