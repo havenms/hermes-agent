@@ -34,5 +34,11 @@ class LocalLoginBackend(LoginBackend):
         seed = str(_store().resolve_secret(handle).get("otp_secret") or "")
         return totp_now(seed) if seed else None
 
+    supports_extra_fields = True
+
+    def resolve_extra(self, handle: str) -> dict[str, str]:
+        extra = _store().resolve_secret(handle).get("extra") or {}
+        return {str(k): str(v) for k, v in extra.items()} if isinstance(extra, dict) else {}
+
     def resolve_secret(self, handle: str) -> dict[str, str]:
-        return {k: str(v) for k, v in _store().resolve_secret(handle).items()}
+        return {k: str(v) for k, v in _store().resolve_secret(handle).items() if k != "extra"}

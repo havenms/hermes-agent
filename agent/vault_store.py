@@ -186,6 +186,9 @@ class VaultItemMeta:
     # ``origin`` is the first/primary one). Fill matching stays exact-origin against
     # this list — no wildcard or subdomain inference is ever derived from it.
     allowed_origins: tuple = ()
+    # Labels of the extra secret fields a login stores (PIN, security answer). Labels are not
+    # secret; the values live in the encrypted payload under ``extra``.
+    extra_labels: tuple = ()
 
     def to_dict(self) -> dict[str, Any]:
         out = {
@@ -202,6 +205,8 @@ class VaultItemMeta:
             out["has_otp"] = True
         if len(self.allowed_origins) > 1:
             out["allowed_origins"] = list(self.allowed_origins)
+        if self.extra_labels:
+            out["extra_fields"] = list(self.extra_labels)
         return out
 
 
@@ -585,7 +590,9 @@ class VaultStore:
             # Login secret payload is password (+ optional TOTP seed); identifier lives in
             # metadata and any stray origin echo is dropped.
             otp_secret = normalize_otp_secret(str(secret.get("otp_secret") or ""))
-            secret = {"password": secret["password"], **({"otp_secret": otp_secret} if otp_secret else {})}
+            extra = normalize_extra_fields(secret.get("extra"))
+            secret = {"password": secret["password"], **({"otp_secret": otp_secret} if otp_secret else {}),
+                      **({"extra": extra} if extra else {})}
         else:
             allowed = PAYMENT_FIELDS if kind == "payment" else ADDRESS_FIELDS
             secret = {k: str(v) for k, v in secret.items() if k in allowed and str(v or "").strip()}
@@ -606,6 +613,8 @@ class VaultStore:
             "identifier": identifier,
             "secret": dict(secret),
         }
+        if secret.get("extra"):
+            record["extra_labels"] = list(secret["extra"])
         with self._locked():
             items = self._read_all()
             items.append(record)
@@ -664,7 +673,38 @@ class VaultStore:
             identifier_type=rec.get("identifier_type") if identifier else None,
             identifier=identifier or None,
             has_otp=bool((rec.get("secret") or {}).get("otp_secret")),
+            extra_labels=tuple(str(x) for x in (rec.get("extra_labels") or ())),
         )
+
+
+MAX_EXTRA_FIELDS = 4  # Discord modals hold 5 text inputs: identifier + password + 3; the typed path takes 4
+MAX_EXTRA_LABEL_LEN = 45  # a Discord text-input label holds 45 characters
+
+
+def normalize_extra_fields(extra: Any) -> dict[str, str]:
+    """Validate the extra secret fields of a login: ``{label: value}``, label as the page shows it.
+
+    Labels must be unique (case-insensitive), short and not "password"; values must be non-empty."""
+    if not extra:
+        return {}
+    if not isinstance(extra, dict):
+        raise VaultError("extra fields must be a mapping of label to value")
+    out: dict[str, str] = {}
+    seen: set[str] = set()
+    for raw_label, raw_value in extra.items():
+        label = " ".join(str(raw_label or "").split())
+        value = str(raw_value or "")
+        if not label or len(label) > MAX_EXTRA_LABEL_LEN:
+            raise VaultError(f"extra field labels must be 1 to {MAX_EXTRA_LABEL_LEN} characters")
+        if label.lower() in seen or label.lower() in ("password", "identifier", "username", "email"):
+            raise VaultError(f"extra field label {label!r} is a duplicate or reserved")
+        if not value.strip():
+            raise VaultError(f"extra field {label!r} has no value")
+        seen.add(label.lower())
+        out[label] = value
+    if len(out) > MAX_EXTRA_FIELDS:
+        raise VaultError(f"a login holds at most {MAX_EXTRA_FIELDS} extra fields")
+    return out
 
 
 def get_vault_store() -> VaultStore:
@@ -676,7 +716,9 @@ def scrub_secret_from_text(text: str, secret: dict[str, Any]) -> str:
     """Defensively strip any secret values from a string (e.g. an exception
     message) before it can be surfaced. Case-sensitive exact substring scrub."""
     scrubbed = text
-    for value in secret.values():
+    values = list(secret.values())
+    values += [v for nested in values if isinstance(nested, dict) for v in nested.values()]
+    for value in values:
         if isinstance(value, str) and len(value) >= 3 and value in scrubbed:
             scrubbed = scrubbed.replace(value, "[REDACTED]")
     # Also collapse anything that looks like a leaked password-ish token in

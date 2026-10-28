@@ -245,6 +245,8 @@ def browser_vault_list() -> str:
             if meta.identifier:
                 entry["identifier"] = meta.identifier
                 entry["identifier_type"] = meta.identifier_type
+            if getattr(meta, "extra_labels", ()):
+                entry["extra_fields"] = list(meta.extra_labels)
             items.append(entry)
     out: dict[str, Any] = {"success": True, "items": items}
     if not items:
@@ -288,7 +290,8 @@ def browser_vault_unlock(backend_name: str) -> str:
 
 
 def browser_vault_save_login(label: str = "", task_id: Optional[str] = None,
-                             identifier: str = "", password: str = "") -> str:
+                             identifier: str = "", password: str = "",
+                             extra_fields: Any = None, extra: Any = None) -> str:
     """Ask the user (masked prompt on their surface) for the login of the CURRENT page, store it in the local
     vault bound to that origin, and fill the password at once. The values never enter the conversation.
 
@@ -297,15 +300,25 @@ def browser_vault_save_login(label: str = "", task_id: Optional[str] = None,
     password is registered with the model-egress redaction boundary first, and the surface is asked to
     delete the user's message."""
     from agent.vault_backends.unlock import can_prompt_here, get_save_login_prompt_callback
-    from agent.vault_store import get_vault_store
+    from agent.vault_store import get_vault_store, normalize_extra_fields
 
     pasted = bool(password)
+    pasted_extra = dict(extra) if isinstance(extra, dict) else {}
     if pasted:
         from agent.redact import register_vault_redaction_value
         register_vault_redaction_value(password)  # before any page or result can echo it
+        for value in pasted_extra.values():
+            register_vault_redaction_value(str(value or ""))
         if not str(identifier or "").strip():
             return json.dumps({"success": False, "error_type": "identifier_required",
                                "error": "A pasted login needs both identifier (email or username) and password."})
+    labels = _extra_labels(extra_fields, pasted_extra)
+    if isinstance(labels, str):
+        return json.dumps({"success": False, "error_type": "bad_extra_fields", "error": labels})
+    if pasted and [lb for lb in labels if lb not in pasted_extra]:
+        return json.dumps({"success": False, "error_type": "extra_value_required", "error": (
+            "A pasted login with extra fields needs a value for each one in `extra`. Or omit password and "
+            "extra to ask the client in a prompt.")})
 
     effective_task_id = task_id or "default"
     # The supervisor's default page session is whatever tab it attached to first (on Browser Use that is
@@ -321,16 +334,35 @@ def browser_vault_save_login(label: str = "", task_id: Optional[str] = None,
                                      f"`hermes vault add` or use Desktop → Settings → Passwords & Logins for {origin}.")})
     host = origin.split("://", 1)[-1]
     site = label.strip() or host
-    # The prompt names the site by host: the user recognises URLs, not agent labels.
-    answer = {"identifier": str(identifier).strip(), "password": str(password)} if pasted else prompt(origin, host)
+    # The prompt names the site the way the client knows it: the model's label ("TestCo Books"), then
+    # the page title, and only then the host.
+    shown = label.strip() or _page_title(effective_task_id) or host
+    if pasted:
+        answer = {"identifier": str(identifier).strip(), "password": str(password),
+                  **({"extra": {lb: str(pasted_extra[lb]) for lb in labels}} if labels else {})}
+    elif labels:
+        if not _accepts_extra_fields(prompt):
+            return json.dumps({"success": False, "error_type": "extra_fields_unsupported", "error": (
+                "This surface can only ask for an email and a password. Ask the client to send the other "
+                f"fields ({', '.join(labels)}) in chat, then call save_login with identifier, password and extra.")})
+        answer = prompt(origin, shown, extra_fields=tuple(labels))
+    else:
+        answer = prompt(origin, shown)
+    if answer and labels and set((answer.get("extra") or {})) != set(labels):
+        answer = None  # the client stopped part way: store nothing half-done
     if not answer or not answer.get("password") or not answer.get("identifier"):
         return json.dumps({"success": False, "error_type": "save_declined",
                            "error": "The user chose not to save a login for this site. Do not ask again this turn."})
     identifier = str(answer["identifier"]).strip()
     id_type = "email" if "@" in identifier else ("phone" if identifier.lstrip("+").isdigit() else "username")
     try:
-        meta = get_vault_store().add_item("login", site, {"identifier_type": id_type, "identifier": identifier,
-                                                        "password": str(answer["password"])}, origin=origin)
+        payload = {"identifier_type": id_type, "identifier": identifier, "password": str(answer["password"])}
+        if labels:
+            payload["extra"] = normalize_extra_fields(answer["extra"])
+            from agent.redact import register_vault_redaction_value
+            for value in payload["extra"].values():
+                register_vault_redaction_value(value)
+        meta = get_vault_store().add_item("login", site, payload, origin=origin)
     except Exception as exc:
         return json.dumps({"success": False, "error_type": "save_failed", "error": str(exc)[:200]})
     finally:
@@ -340,6 +372,12 @@ def browser_vault_save_login(label: str = "", task_id: Optional[str] = None,
            "identifier_type": id_type, "fill": filled,
            "next": "Type the identifier into the username field if the form has one, then submit.",
            "if_rejected": _password_rejected_hint(origin)}
+    if labels:
+        out["extra_fields"] = list(labels)
+        missing = (filled.get("extra_unmatched") if isinstance(filled, dict) else None) or list(labels)
+        if missing:
+            out["next"] += (f" Not typed yet: {', '.join(missing)}. When the page shows that field, call "
+                            "browser_vault action=fill_field with this handle and field=<label>.")
     if not (isinstance(filled, dict) and filled.get("success")):
         out["password_typed"] = False
         out["next"] = ("The login is saved, but the password could not be typed into this page. Open the sign-in "
@@ -360,6 +398,49 @@ def _password_rejected_hint(origin: str) -> str:
             f"form, THE PASSWORD DID NOT WORK. Tell the client in plain words, for example: \"That password did "
             f"not work on {host}. Could you check it and send it again?\" Then call save_login again. Never "
             "repeat the password.")
+
+
+def _extra_labels(extra_fields: Any, pasted_extra: dict) -> list[str] | str:
+    """The extra secret field labels for save_login, or an error string."""
+    from agent.vault_store import MAX_EXTRA_FIELDS, VaultError, normalize_extra_fields
+
+    raw = extra_fields if isinstance(extra_fields, (list, tuple)) else ([extra_fields] if extra_fields else [])
+    labels = [" ".join(str(x or "").split()) for x in raw]
+    labels = [lb for lb in labels if lb]
+    for lb in pasted_extra:
+        lb = " ".join(str(lb or "").split())
+        if lb and lb.lower() not in [x.lower() for x in labels]:
+            labels.append(lb)
+    if not labels:
+        return []
+    try:
+        if len({lb.lower() for lb in labels}) != len(labels):
+            raise VaultError("extra field labels must be different")
+        normalize_extra_fields({lb: "x" for lb in labels})
+    except VaultError as exc:
+        return f"{exc}. Use at most {MAX_EXTRA_FIELDS} short labels, as the page shows them (for example PIN)."
+    return labels
+
+
+def _accepts_extra_fields(prompt: Any) -> bool:
+    """True when the surface's save-login prompt can ask for extra fields."""
+    import inspect
+    try:
+        params = inspect.signature(prompt).parameters
+    except (TypeError, ValueError):
+        return False
+    return "extra_fields" in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
+def _page_title(task_id: str) -> str:
+    """The current page title, short, or "" (a read-only probe; never fails the caller)."""
+    try:
+        res = _eval_js(task_id, "document.title")
+    except Exception:  # health: allow BLE001 -- the title only names the site on a card
+        return ""
+    title = res.get("result") if isinstance(res, dict) and res.get("success") else ""
+    title = " ".join(str(title or "").split())
+    return title[:60] if title and not title.lower().startswith(("http://", "https://")) else ""
 
 
 def _scrub_pasted_message() -> bool:
@@ -525,6 +606,7 @@ def _fill_bound_page(backend: Any, handle: str, meta: Any, page_origin: str, eff
         classify_checkout_control,
         classify_login_control,
         select_checkout_fills,
+        select_extra_fills,
         select_password_fill,
     )
     from agent.vault_backends import UnlockRequired
@@ -551,14 +633,21 @@ def _fill_bound_page(backend: Any, handle: str, meta: Any, page_origin: str, eff
         result = classify(LoginControl.from_dict(raw))
         if result is not None:
             classified.append(result)
-    if not classified:
+    if not classified and not (meta.kind == "login" and getattr(meta, "extra_labels", ())):
         return json.dumps({"success": False, "error": f"No {meta.kind} form fields were found on the current page."})
 
     # ── Resolve secret and fill (secret never enters any logged string) ─────
     try:
+        extra_unmatched: list[str] = []
         if meta.kind == "login":
             secret = {"password": backend.resolve_password(handle)}
             fills = select_password_fill(classified, secret["password"])
+            extras = backend.resolve_extra(handle) if getattr(meta, "extra_labels", ()) else {}
+            if extras:
+                secret["extra"] = extras
+                controls = [LoginControl.from_dict(r) for r in raw_controls if isinstance(r, dict)]
+                extra_fills, extra_unmatched = select_extra_fills(controls, extras, {f["index"] for f in fills})
+                fills = fills + extra_fills
         else:
             secret = backend.resolve_secret(handle)
             fills = select_checkout_fills(classified, secret, PAYMENT_FIELDS if meta.kind == "payment" else ADDRESS_FIELDS)
@@ -575,6 +664,8 @@ def _fill_bound_page(backend: Any, handle: str, meta: Any, page_origin: str, eff
     # browser_cdp Runtime.evaluate reads) that echoes them is scrubbed.
     # Address values are not secrets but the card fields are: register every payment value.
     for value in (secret.values() if meta.kind == "payment" else [secret.get("password", "")]):
+        register_vault_redaction_value(value)
+    for value in (secret.get("extra") or {}).values():
         register_vault_redaction_value(value)
 
     try:
@@ -612,6 +703,12 @@ def _fill_bound_page(backend: Any, handle: str, meta: Any, page_origin: str, eff
 
     out = {"success": bool(filled), "filled_fields": int(filled), "backend": backend.name,
            "kind": meta.kind, "origin": page_origin}
+    if meta.kind == "login" and secret.get("extra"):
+        out["extra_filled"] = [f["label"] for f in fills if f.get("token") == "extra"]
+        if extra_unmatched:
+            out["extra_unmatched"] = extra_unmatched
+            out["extra_hint"] = ("No field on this page matched " + ", ".join(extra_unmatched) + ". When it shows, call "
+                                 "browser_vault action=fill_field with this handle, field=<label> and ref=<CSS selector>.")
     if meta.kind == "login":
         out["next"] = ("Submit. If the site then asks for a verification code, call browser_vault action=enter_code with this handle"
                        + (" (a code will be generated automatically)." if meta.has_otp else "."))
@@ -621,6 +718,108 @@ def _fill_bound_page(backend: Any, handle: str, meta: Any, page_origin: str, eff
     if meta.kind != "login":
         out["fields"] = sorted(f["token"] for f in fills)  # which controls were targeted, never the values
     return json.dumps(out)
+
+
+@plugin_errors_as_refusal
+def browser_vault_fill_field(handle: str, field: str, ref: str = "", task_id: Optional[str] = None) -> str:
+    """Fill ONE page control from a named secret of a saved login (an extra field such as "PIN", or
+    "password"). Same path as ``fill``: exact-origin guard before and inside the write, the value
+    registered for redaction first, written over the supervisor CDP socket, never returned."""
+    from agent.redact import register_vault_redaction_value
+    from agent.vault_backends import UnlockRequired, backend_for_handle
+    from agent.vault_login_classifier import LoginControl, build_fill_js, build_inspection_js, match_extra_field
+    from agent.vault_store import scrub_secret_from_text
+
+    effective_task_id = task_id or "default"
+    want = " ".join(str(field or "").split())
+    if not want:
+        return json.dumps({"success": False, "error": "fill_field needs field=<label>, for example field=\"PIN\"."})
+    backend = backend_for_handle(handle)
+    if backend is not None and backend.needs_unlock and not backend.is_unlocked():
+        unlocked = json.loads(browser_vault_unlock(backend.name))
+        if not unlocked.get("success"):
+            return json.dumps(unlocked)
+    try:
+        meta = backend.get_meta(handle) if backend is not None else None
+    except UnlockRequired:
+        return json.dumps({"success": False, "error_type": "unlock_required",
+                           "error": f"{backend.display_name} locked again; call browser_vault action=unlock."})
+    if meta is None or meta.kind != "login":
+        return json.dumps({"success": False, "error": f"No saved login with handle {handle!r}. Use browser_vault action=list."})
+    is_password = want.lower() == "password"
+    labels = {lb.lower(): lb for lb in getattr(meta, "extra_labels", ())}
+    if not is_password and not getattr(backend, "supports_extra_fields", False):
+        return json.dumps({"success": False, "error_type": "extra_fields_unsupported", "error": (
+            f"{backend.display_name} logins have no extra fields here. Ask the client for that field with "
+            "save_login on the local vault, or let them type it on the takeover page.")})
+    if not is_password and want.lower() not in labels:
+        return json.dumps({"success": False, "error_type": "unknown_field", "error": (
+            f"This login has no field {want!r}. Its fields: " + ", ".join(["password", *labels.values()]) + ".")})
+    page_origin = _bound_page_origin(effective_task_id, meta, "login")
+    if isinstance(page_origin, dict):
+        return json.dumps(page_origin)
+
+    with backend.fill_context():
+        refusal = snapshot_refusal(backend, handle, meta, page_origin)
+        if refusal is not None:
+            return json.dumps(refusal)
+        nonce = secrets.token_hex(8)
+        inspect = _eval_js(effective_task_id, build_inspection_js(nonce))
+        raw = _parse_json_result(inspect.get("result")) if inspect.get("success") else None
+        if isinstance(raw, str):
+            raw = _parse_json_result(raw)
+        if not isinstance(raw, list):
+            return json.dumps({"success": False, "error": "Could not inspect the page's input fields."})
+        controls = [LoginControl.from_dict(r) for r in raw if isinstance(r, dict)]
+        target: Optional[int] = None
+        if ref:
+            probe = _eval_js(effective_task_id, (
+                "(() => { let el = null; try { el = document.querySelector(" + json.dumps(ref) + "); } catch (e) { return 'bad'; }"
+                " const s = el && el.getAttribute('data-hermes-vault-slot'); if (!s) return 'none';"
+                " const [n, i] = s.split(':'); return n === " + json.dumps(nonce) + " ? i : 'none'; })()"))
+            found = str(probe.get("result") or "") if probe.get("success") else ""
+            if found.isdigit() and any(c.index == int(found) for c in controls):
+                target = int(found)
+            else:
+                return json.dumps({"success": False, "error_type": "field_not_found", "error": (
+                    f"ref {ref!r} does not point at a visible text field. Pass a CSS selector such as "
+                    "#pin or input[name=pin], or omit ref to match the field by its label.")})
+        else:
+            scored = sorted(((match_extra_field(want, c), c.index) for c in controls), key=lambda s: (-s[0], s[1]))
+            if is_password:
+                scored = [(90, c.index) for c in controls if c.type == "password"][:1]
+            if scored and scored[0][0] > 0:
+                target = scored[0][1]
+        if target is None:
+            return json.dumps({"success": False, "error_type": "field_not_found", "error": (
+                f"No field labelled like {want!r} is on this page. Pass ref=<CSS selector> for the field.")})
+        try:
+            value = backend.resolve_password(handle) if is_password else backend.resolve_extra(handle).get(labels[want.lower()], "")
+        except UnlockRequired:
+            return json.dumps({"success": False, "error_type": "unlock_required",
+                               "error": f"{backend.display_name} locked again; call browser_vault action=unlock."})
+        if not value:
+            return json.dumps({"success": False, "error": f"The saved login has no value for {want!r}."})
+        register_vault_redaction_value(value)
+        secret = {"value": value}
+        try:
+            result = _eval_js_secret(effective_task_id, build_fill_js(
+                [{"index": target, "token": "extra", "value": value}], expected_origin=page_origin, nonce=nonce))
+        except Exception as exc:  # health: allow BLE001 -- a CDP failure becomes a typed result, scrubbed of the value
+            return json.dumps({"success": False, "error": scrub_secret_from_text(str(exc), secret)})
+        finally:
+            value = ""
+        if not result.get("success"):
+            return json.dumps({"success": False, "error": scrub_secret_from_text(str(result.get("error") or "fill failed"), secret)})
+        parsed = _parse_json_result(result.get("result"))
+        if isinstance(parsed, str):
+            parsed = _parse_json_result(parsed)
+        if isinstance(parsed, dict) and parsed.get("refused") == "origin_changed":
+            return json.dumps({"success": False, "error_type": "origin_changed", "error": (
+                f"Refused: the page left {page_origin} before the fill ran. Nothing was written.")})
+        filled = int(parsed.get("filled", 0)) if isinstance(parsed, dict) else 0
+        return json.dumps({"success": bool(filled), "field": labels.get(want.lower(), "password"),
+                           "filled_fields": filled, "origin": page_origin, "backend": backend.name})
 
 
 def _confirm_payment_fill(label: str, origin: str) -> bool:
@@ -650,7 +849,10 @@ BROWSER_VAULT_SCHEMA = {
         "the password for a login, card fields after the user confirms, address fields; refused unless the page "
         "origin matches the item); save_login (nothing saved for this site: the client enters it in a login prompt, "
         "Hermes saves and fills it; fallback: if the client already pasted the login in chat, pass identifier and "
-        "password and it is saved the same way); enter_code (a one-time/2FA code after the password: generated from a saved "
+        "password and it is saved the same way; when the form also asks for another secret such as a PIN or a "
+        "security answer, pass its page label in extra_fields and the client is asked for it too); fill_field "
+        "(handle, field, optional ref: type one named secret of a saved login, e.g. field=PIN, into one page "
+        "field; fill already types extras whose label matches a field); enter_code (a one-time/2FA code after the password: generated from a saved "
         "authenticator key or asked of the user; no_code_field means approve on their device); unlock (backend: "
         "ask the user to unlock 1Password/Bitwarden). Prefer the login prompt over asking in chat. If the client "
         "already pasted a login, save it with save_login and use it; do not refuse. Never repeat a password, card "
@@ -659,8 +861,16 @@ BROWSER_VAULT_SCHEMA = {
     "parameters": {
         "type": "object",
         "properties": {
-            "action": {"type": "string", "enum": ["list", "fill", "save_login", "enter_code", "unlock"]},
-            "handle": {"type": "string", "description": "fill / enter_code: a handle from list."},
+            "action": {"type": "string", "enum": ["list", "fill", "fill_field", "save_login", "enter_code", "unlock"]},
+            "handle": {"type": "string", "description": "fill / fill_field / enter_code: a handle from list."},
+            "extra_fields": {"type": "array", "items": {"type": "string"}, "description": (
+                "save_login only: labels of other SECRET fields the form asks for, as the page shows them "
+                "(e.g. [\"PIN\", \"Security answer\"]; at most 4). Type non-secret fields yourself.")},
+            "extra": {"type": "object", "additionalProperties": {"type": "string"}, "description": (
+                "save_login fallback only: {label: value} of extra secret fields the client already pasted in chat.")},
+            "field": {"type": "string", "description": "fill_field only: the field label, e.g. PIN, or password."},
+            "ref": {"type": "string", "description": (
+                "fill_field only: CSS selector of the page field (e.g. #pin). Omit to match by label.")},
             "backend": {"type": "string", "enum": ["onepassword", "bitwarden"], "description": "unlock only."},
             "label": {"type": "string", "description": "save_login only: short site name (default: the host)."},
             "identifier": {"type": "string", "description": (
@@ -701,11 +911,14 @@ def _handle_vault(args: dict[str, Any], **kwargs) -> str:
         "fill": lambda: browser_vault_fill(handle=handle, task_id=tid),
         "save_login": lambda: browser_vault_save_login(
             label=label, task_id=tid, identifier=str(args.get("identifier") or ""),
-            password=str(args.get("password") or "")),
+            password=str(args.get("password") or ""), extra_fields=args.get("extra_fields"),
+            extra=args.get("extra")),
+        "fill_field": lambda: browser_vault_fill_field(
+            handle=handle, field=str(args.get("field") or ""), ref=str(args.get("ref") or ""), task_id=tid),
         "enter_code": lambda: browser_vault_enter_code(handle=handle, task_id=tid),
     }
     if action not in page_ops:
-        return json.dumps({"success": False, "error": f"Unknown action {action!r}; use list, fill, save_login, "
+        return json.dumps({"success": False, "error": f"Unknown action {action!r}; use list, fill, fill_field, save_login, "
                                                        "enter_code or unlock."})
     # The tool executor already holds the task's browser; hold it here too, so a direct caller
     # (plugin, test, other executor) never loses the login page while the user is asked.

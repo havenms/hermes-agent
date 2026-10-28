@@ -54,6 +54,10 @@ VAULT_PROMPT_TIMEOUT_DEFAULTS = {"save_login": 4 * 3600, "code": 30 * 60, "unloc
 # Without this, the first unrelated message after a long wait ("are you there?") would be
 # stored as the username or typed into the page as the code.
 IDENTIFIER_PATTERN = r"\S{1,254}"  # email, phone or username: one token, no spaces
+# The password card's way out. A typed "skip", "wrong", "cancel" or "stop" still declines
+# (``tools.clarify_gateway.DECLINE_WORDS``); the card does not teach a command word.
+WRONG_LOGIN_LINE = "Wrong email or username? Just tell me."
+
 CODE_PATTERN = r"(?=.{4,})(?=[^0-9]*[0-9])[A-Za-z0-9]{1,8}(?:[ -]?[A-Za-z0-9]{1,8}){0,2}"  # 123456, 123 456, G-123456
 
 
@@ -93,32 +97,48 @@ def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
             secret=True, last=True, kind="unlock", chat_guard=True,
         ))
 
-    def save_login_prompt(origin: str, site_label: str) -> Optional[dict[str, str]]:
-        """Identifier + password for the page currently open. Stored in the local
-        vault bound to ``origin`` and filled into the page at once.
+    def save_login_prompt(origin: str, site_label: str,
+                          extra_fields: tuple = ()) -> Optional[dict]:
+        """Identifier + password (+ any extra secret fields) for the page currently open. Stored in
+        the local vault bound to ``origin`` and filled into the page at once.
 
-        Two questions, so the text says so: a bare "Now the password" read as the
-        first prompt repeating, and an unanswered first card left the caller
-        looking like it had hung on a prompt the user never saw. The second card
-        names the identifier it will save, so a wrong one is caught before the
-        password is sent (the identifier is not a secret: browser_vault list shows it)."""
-        host = site_label or origin
+        One card per field, numbered (1/3), (2/3)...: a bare "Now the password" read as the first
+        prompt repeating, and an unanswered first card left the caller looking like it had hung on a
+        prompt the user never saw. The second card names the identifier it will save, so a wrong one
+        is caught before the password is sent (the identifier is not a secret: browser_vault list
+        shows it). ``site_label`` is the name the client knows (the model's label, the page title,
+        then the host). A decline at any card stores nothing."""
+        site = site_label or origin
+        extras = [str(x) for x in (extra_fields or ()) if str(x or "").strip()]
+        total = 2 + len(extras)
         identifier = _clean(ask(
-            f"🔑 To get into {host} for you, I need your login (1/2).\n\n"
+            f"🔑 To get into {site} for you, I need your login (1/{total}).\n\n"
             "Reply with the email or username you use there.",
             secret=False, last=False, kind="save_login", answer_pattern=IDENTIFIER_PATTERN,
         ))
         if not identifier:
             return None
         password = ask(
-            f"🔑 Thanks! Now I need the password for {identifier} (2/2).\n\n"
+            f"🔑 Thanks! Now I need the password for {identifier} (2/{total}).\n\n"
             "You can also reply here with just the password. I'll type it in and remove your message. "
-            "If the email or username is wrong, reply skip.",
-            secret=True, last=True, kind="save_login", chat_guard=True,
+            f"{WRONG_LOGIN_LINE}",
+            secret=True, last=not extras, kind="save_login", chat_guard=True,
         )
         if not password:
             return None
-        return {"identifier": identifier, "password": password}
+        answer: dict = {"identifier": identifier, "password": password}
+        if extras:
+            answer["extra"] = {}
+            for n, label in enumerate(extras, start=3):
+                value = ask(
+                    f"🔑 {site} also asks for your {label} ({n}/{total}).\n\n"
+                    "Reply here with just that. I'll type it in and remove your message.",
+                    secret=True, last=n == total, kind="save_login", chat_guard=True,
+                )
+                if not value:
+                    return None
+                answer["extra"][label] = value
+        return answer
 
     def code_prompt(site: str, hint: str) -> str:
         """One-time code the site just sent, for a login with no stored seed."""

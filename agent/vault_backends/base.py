@@ -59,6 +59,14 @@ class LoginBackend(ABC):
         Server-side only, like resolve_password."""
         return None
 
+    # Extra secret fields (PIN, security answer) on a login. Only the local vault stores them;
+    # 1Password and Bitwarden custom fields are not mapped, so those backends refuse extras.
+    supports_extra_fields = False
+
+    def resolve_extra(self, handle: str) -> dict[str, str]:
+        """``{label: value}`` of a login's extra secret fields (server-side only); {} when none."""
+        return {}
+
     def resolve_secret(self, handle: str) -> dict[str, str]:
         """Full payload of a payment/address item (server-side only). External managers list only
         logins, so the base returns the password-only shape."""

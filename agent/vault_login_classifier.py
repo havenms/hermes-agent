@@ -280,6 +280,52 @@ _LOGIN_CONTROL_INSPECTION_JS_TEMPLATE = """(() => {
 })()"""
 
 
+_WORD_SPLIT = re.compile(r"[^0-9a-z]+")
+_CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+_FILLER_WORDS = {"your", "the", "a", "an", "of", "to", "enter", "please", "type", "here", "required"}
+
+
+def _words(text: str) -> list[str]:
+    return [w for w in _WORD_SPLIT.split(_CAMEL.sub(" ", str(text or "")).lower()) if w]
+
+
+def match_extra_field(label: str, control: "LoginControl") -> int:
+    """How well a page control matches an extra secret field's label; 0 = no match.
+
+    Case-insensitive and word based, so "PIN" matches "Pin code", ``pin_code`` and ``pinCode`` but not
+    "spinner"; "Security answer" matches "Answer to your security question". Label, aria-label,
+    placeholder and title count more than name/id."""
+    want = [w for w in _words(label) if w not in _FILLER_WORDS] or _words(label)
+    if not want:
+        return 0
+    visible, names = set(_words(control.label)), set(_words(control.name))
+    if all(w in visible for w in want):
+        return 90
+    if all(w in names for w in want):
+        return 80
+    joined = "".join(want)
+    if len(joined) >= 3 and joined in "".join(_words(control.name)):
+        return 60  # securityanswer, memorableword
+    return 0
+
+
+def select_extra_fills(controls: list["LoginControl"], extras: dict[str, str],
+                       taken: set[int]) -> tuple[list[dict[str, Any]], list[str]]:
+    """Map extra secret fields onto the best unclaimed control each. Returns (fills, unmatched labels)."""
+    fills: list[dict[str, Any]] = []
+    unmatched: list[str] = []
+    used = set(taken)
+    for label, value in extras.items():
+        scored = sorted(((match_extra_field(label, c), c.index) for c in controls if c.index not in used),
+                        key=lambda s: (-s[0], s[1]))
+        if scored and scored[0][0] > 0:
+            used.add(scored[0][1])
+            fills.append({"index": scored[0][1], "token": "extra", "value": value, "label": label})
+        else:
+            unmatched.append(label)
+    return fills, unmatched
+
+
 def build_fill_js(fills: list[dict[str, Any]], expected_origin: str, nonce: str = "") -> str:
     """Build a JS expression that fills the selected controls and reports only a count. The
     returned expression never echoes the values back.
