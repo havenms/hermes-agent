@@ -552,6 +552,47 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
             except Exception:
                 logger.warning("Planned-restart notification remains pending", exc_info=True)
 
+    async def _restart_notice_client_for(self, profile, platform) -> bool:
+        """``display.restart_notice == "client"`` for *platform*, read under the served profile's scope."""
+        from contextlib import nullcontext
+        from gateway.client_restart_notice import restart_notice_is_client
+        from gateway.run import _async_profile_runtime_scope
+        profile_home = (getattr(self, "_served_profile_homes", None) or {}).get(profile) if profile else None
+        try:
+            async with _async_profile_runtime_scope(profile_home) if profile_home else nullcontext():
+                return restart_notice_is_client(platform)
+        except Exception:
+            logger.debug("restart_notice scope lookup failed", exc_info=True)
+            return False
+
+    async def _send_client_back_online_notices(self, skip_target=None) -> int:
+        """Send ``gateway.startup.online_client`` to each chat that got the client shutdown line.
+
+        ``skip_target`` is the ``/restart`` requester's chat, which already got its own notice.
+        """
+        from gateway.client_restart_notice import pop_client_restart_targets
+        from gateway.config import HomeChannel
+        from gateway.delivery import resolve_delivery_transport
+        sent = 0
+        for platform_str, chat_id, thread_id, profile in pop_client_restart_targets():
+            try:
+                if skip_target is not None and tuple(skip_target) == (platform_str, chat_id, thread_id):
+                    continue
+                platform = Platform(platform_str)
+                transport = resolve_delivery_transport(platform, self.config, self._adapters_for_profile(profile))
+                if transport is None:
+                    logger.debug("Back-online notice skipped: no live transport for %s", platform_str)
+                    continue
+                home = HomeChannel(platform=platform, chat_id=str(chat_id), name="", thread_id=thread_id)
+                if await self._send_home_channel_message(
+                    platform, home, transport, t("gateway.startup.online_client"),
+                    "Back-online notice failed for %s:%s: %s",
+                ):
+                    sent += 1
+            except Exception:
+                logger.debug("Back-online notice failed", exc_info=True)
+        return sent
+
     async def _send_home_channel_startup_notifications(
         self, *, skip_targets: Optional[set[tuple[str, str, Optional[str]]]] = None
     ) -> set[tuple[str, str, Optional[str]]]:
@@ -582,6 +623,10 @@ class GatewayNotificationsMixin(GatewayUpdateNotificationsMixin, GatewayNotifica
                 continue
             target = _served_notice_target_key(profile, platform.value, home.chat_id, home.thread_id)
             if target in skipped or target in delivered:
+                continue
+            if await self._restart_notice_client_for(profile, platform):
+                logger.info("Home-channel startup notification skipped: %s has restart_notice=client", platform.value)
+                delivered.add(target)  # owed nothing: lets the planned-restart marker discharge
                 continue
             chat = _delivery_target_key(platform.value, home.chat_id, home.thread_id, profile=profile)
             if chat in notified_chats:

@@ -317,7 +317,8 @@ class GatewayStartupMixin:
         claimed = await self._claim_pending_obligations()
 
         async def _boot_sends() -> None:
-            await self._send_restart_notification()
+            requester = await self._send_restart_notification()
+            await self._send_client_back_online_notices(skip_target=requester)
             if planned_restart_notification_pending:
                 await self._replay_pending_planned_restart_notification()
             await self._redeliver_claimed_obligations(claimed)

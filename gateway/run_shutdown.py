@@ -1034,6 +1034,7 @@ class GatewayShutdownMixin(GatewaySessionEndMixin):
                     restart_source.platform.value, restart_source.chat_id, restart_source.thread_id
                 )
         notified: set[tuple[str, str, Optional[str]]] = set()
+        client_targets: list = []  # chats that got the client line; they get "I'm back" at boot
         for session_key in self._snapshot_running_agents():
             target = await self._shutdown_notification_target(session_key)
             if target is None:
@@ -1068,11 +1069,16 @@ class GatewayShutdownMixin(GatewaySessionEndMixin):
             # shape as the stall watcher). The requester's own chat on an in-chat /restart is the
             # requested outcome of that command and is never suppressed.
             async def _send_active(adapter=adapter, chat_id=chat_id, platform_str=platform_str,
-                                   metadata=metadata, dedup_key=dedup_key):
+                                   metadata=metadata, dedup_key=dedup_key, thread_id=thread_id, profile=profile):
+                from gateway.client_restart_notice import restart_notice_is_client
+                client = restart_notice_is_client(platform_str)
+                text = t("gateway.shutdown.notice_client") if client else msg
                 if await self._send_shutdown_notice(
-                    adapter, chat_id, msg, "active chat", platform_str, metadata=metadata
+                    adapter, chat_id, text, "active chat", platform_str, metadata=metadata
                 ):
                     notified.add(dedup_key)
+                    if client:
+                        client_targets.append((platform_str, chat_id, thread_id, profile))
             from gateway.warning_notifications import present_notification
             from gateway.run import _async_profile_runtime_scope
             scope = (_async_profile_runtime_scope(self._resolve_profile_home_for_source(source))
@@ -1081,6 +1087,9 @@ class GatewayShutdownMixin(GatewaySessionEndMixin):
                 presented = await present_notification(_send_active, platform=platform, diagnostic=restart_key != dedup_key)
             if not presented:
                 notified.add(dedup_key)  # suppressed: latch so the home-channel pass does not re-target it
+        if client_targets:
+            from gateway.client_restart_notice import record_client_restart_targets
+            record_client_restart_targets(client_targets)
         if self._restart_requested and restart_source is not None:
             logger.debug("Skipping home-channel shutdown notifications for in-chat restart")
             return
@@ -1118,6 +1127,10 @@ class GatewayShutdownMixin(GatewaySessionEndMixin):
                 )
                 continue
             async def _send_home(adapter=adapter, home=home, platform=platform, metadata=metadata):
+                from gateway.client_restart_notice import restart_notice_is_client
+                if restart_notice_is_client(platform):
+                    logger.info("Home-channel shutdown notice skipped: %s has restart_notice=client", platform.value)
+                    return
                 if await self._send_shutdown_notice(
                     adapter, str(home.chat_id), msg, "home channel", platform.value, metadata=metadata,
                 ):

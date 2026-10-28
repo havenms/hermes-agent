@@ -33,6 +33,9 @@ _GLOBAL_DEFAULTS: dict[str, Any] = {
     # Working-state text on text-rendering indicators (Slack assistant status): "full"/true = verb +
     # argument preview, "verb" = verb only (keeps paths out of shared channels), "off"/false = static.
     "live_status": "full",
+    # Restart/shutdown notices: "full" (default) or "client" (only chats with a running task, plain
+    # words, no product name, no home-channel broadcast). See gateway/client_restart_notice.py.
+    "restart_notice": "full",
 }
 
 # Tiers: HIGH = editing, personal/team use; MEDIUM = editing but customer-facing;
@@ -196,6 +199,7 @@ _NORMALISERS: dict[str, Any] = {
     "tool_progress_grouping": _norm_choice(("accumulate", "separate")),
     "reasoning_style": _norm_choice(("code", "blockquote", "subtext")),
     "tool_preview_length": _norm_int,
+    "restart_notice": _norm_choice(("full", "client")),
 }
 
 
