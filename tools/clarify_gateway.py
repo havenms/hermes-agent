@@ -266,13 +266,33 @@ def _coerce_multi_select_text(entry: _ClarifyEntry, text: str) -> Optional[str]:
     return json.dumps(selected, ensure_ascii=False) if selected else None
 
 
-def attempt_text_response_for_session(session_key: str, response: str) -> str:
-    """Try to resolve the oldest pending clarify from typed text; returns a TEXT_* outcome."""
+def attempt_text_response_for_session(session_key: str, response: str,
+                                      responder_id: Optional[str] = None) -> str:
+    """Try to resolve the oldest pending clarify from typed text; returns a TEXT_* outcome.
+    ``TEXT_NOT_OWNER`` when the prompt belongs to another user (the entry stays armed)."""
     entry = get_pending_for_session(session_key, include_choice_prompts=True)
     if entry is None:
         return TEXT_NO_PENDING
+    return _attempt_text_response(entry, response, responder_id)
+
+
+def attempt_text_response_for_entry(clarify_id: str, response: str,
+                                    responder_id: Optional[str] = None) -> str:
+    """Same as :func:`attempt_text_response_for_session` for one known prompt: an answer typed
+    into a platform form for that card (the Discord secret-input modal), not into the chat."""
+    entry = get_pending(clarify_id)
+    if entry is None:
+        return TEXT_NO_PENDING
+    return _attempt_text_response(entry, response, responder_id)
+
+
+def _attempt_text_response(entry: _ClarifyEntry, response: str, responder_id: Optional[str]) -> str:
+    if not may_answer(entry, responder_id):
+        return TEXT_NOT_OWNER
     coerced, reason = _coerce_text_response_detailed(entry, response)
     if coerced is None:
+        if reason == "not_an_answer":
+            return TEXT_NOT_AN_ANSWER
         return TEXT_REJECTED_SELECTION if reason == "invalid_selection" else TEXT_REJECTED_PROSE
     if resolve_gateway_clarify(entry.clarify_id, coerced):
         return TEXT_RESOLVED

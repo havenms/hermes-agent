@@ -1344,6 +1344,7 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
         # Discord's edit rate limit (~1 edit per stream tick for the rest of a long reply). Mirrors the
         # Telegram #58563 fix.
         self._last_overflow_preview: dict[tuple, str] = {}
+        self._secret_prompt_views: dict[str, Any] = {}  # clarify_id -> live SecretPromptView
         self._warned_fail_closed_default = False
 
     def _config_value(self, key: str, default: Any, *, env_key: Optional[str] = None) -> Any:
@@ -5839,8 +5840,7 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                     allowed_role_ids=self._allowed_role_ids,
                 )
             else:
-                hint = t("platform.discord.prompt.clarify_hint_text")
-                view = None
+                hint, view = self._secret_prompt_view(clarify_id)
             content = self._self_contained_prompt_content(
                 f"❓ **{clarify_title}**", str(question or "").strip(), tail=f"\n\n{hint}",
             )
@@ -5849,6 +5849,38 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                 send_kwargs["view"] = view
             return send_kwargs, view
         return await self._send_prompt(chat_id, metadata, _build, fail_log="send_clarify")
+
+    # A secret prompt's button view outlives no prompt: retired by the gateway, capped at a day.
+    _SECRET_PROMPT_VIEW_MAX_S = 86400
+
+    def _secret_prompt_view(self, clarify_id: str) -> tuple[str, Any]:
+        """``(hint, view)`` for an open-ended clarify card: a private-entry button for a secret
+        prompt (adapter_secret_prompt_view.py), else the plain "reply in this channel" hint."""
+        try:
+            from tools.clarify_gateway import get_pending
+            entry = get_pending(clarify_id)
+        except Exception:  # health: allow BLE001 -- no entry means the plain card
+            entry = None
+        view_cls = globals().get("SecretPromptView")
+        if entry is None or not entry.secret or view_cls is None:
+            return t("platform.discord.prompt.clarify_hint_text"), None
+        view = view_cls(
+            clarify_id=clarify_id, owner_user_id=entry.owner_user_id,
+            allowed_user_ids=self._allowed_user_ids, allowed_role_ids=self._allowed_role_ids,
+            timeout=self._SECRET_PROMPT_VIEW_MAX_S,
+        )
+        self._secret_prompt_views[clarify_id] = view
+        view.on_closed = lambda: self._secret_prompt_views.pop(clarify_id, None)
+        return t("platform.discord.prompt.secret_hint"), view
+
+    async def retire_clarify_card(self, clarify_id: str, notice: str) -> None:
+        """Close a secret prompt's button when the prompt ends without the modal (typed answer,
+        timeout, /stop, run end). Other clarify cards keep their own lifecycle: a no-op for them."""
+        view = self._secret_prompt_views.pop(clarify_id, None)
+        if view is None:
+            return
+        color = discord.Color.green() if notice == t("gateway.clarify.answered_secret") else discord.Color.greyple()
+        await view.close(notice, color)
 
     async def send_update_prompt(
         self, chat_id: str, prompt: str, default: str = "", session_key: str = "",
@@ -6407,6 +6439,7 @@ def _define_discord_view_classes() -> None:
     """Register Discord UI view classes as module globals.
     Called at module load and after a lazy install so the classes exist whenever DISCORD_AVAILABLE."""
     global ExecApprovalView, SlashConfirmView, UpdatePromptView, ModelPickerView, ClarifyChoiceView, ChoicePickerView
+    global SecretPromptView
 
     class _HermesView(discord.ui.View):
         """Shared plumbing for Hermes component views: allowlist auth, single-use
@@ -6494,6 +6527,8 @@ def _define_discord_view_classes() -> None:
             await self._expire_embed(t("platform.discord.prompt.expired_footer"))
 
     ExecApprovalView = build_exec_approval_view(discord, _HermesView, unauthorized=_unauthorized)
+    from plugins.platforms.discord.adapter_secret_prompt_view import build_secret_prompt_view
+    SecretPromptView = build_secret_prompt_view(discord, _HermesView, unauthorized=_unauthorized)
 
     class SlashConfirmView(_HermesView):
         """Approve Once / Always Approve / Cancel for slash-command confirmations (``/reload-mcp``,
