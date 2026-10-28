@@ -1661,12 +1661,26 @@ def _cron_tick_profile_homes(config: object) -> list[tuple[str, Path]]:
 
     homes = _multiplex_profile_homes(config)
     active = get_active_profile_name() or "default"  # launch profile, pre-identity (ticker boot)
-    if any(name == active for name, _home in homes):
+    if not any(name == active for name, _home in homes):
+        try:
+            homes = homes + [(active, get_profile_dir(active))]
+        except Exception:
+            pass
+    return _cron_profiles_allowed(homes)
+
+
+def _cron_profiles_allowed(homes: list[tuple[str, Path]]) -> list[tuple[str, Path]]:
+    """Keep only the profiles named in ``HERMES_CRON_PROFILES`` (comma list) when it is set.
+
+    TAPAS patch: a host runs one gateway per profile from different checkouts (a dev build next
+    to the shared install). Upstream lets every gateway tick every profile and relies on the
+    per-profile tick lock, so a dev gateway could run another client's cron jobs with dev code.
+    The systemd drop-in of such a gateway sets this to its own profile. Unset = upstream."""
+    raw = os.environ.get("HERMES_CRON_PROFILES", "").strip()
+    if not raw:
         return homes
-    try:
-        return homes + [(active, get_profile_dir(active))]
-    except Exception:
-        return homes
+    allowed = {part.strip() for part in raw.split(",") if part.strip()}
+    return [(name, home) for name, home in homes if name in allowed]
 
 
 def _cron_profile_gate(name: str, home: Path) -> bool:
