@@ -668,6 +668,8 @@ gateway:
     option_line: "  {index}. {choice}"
     question: "❓ {question}"
     answered: "✅ answered: {response}"
+    secret_not_deleted: "🔒 I could not delete your message. Please delete it yourself, because it holds a secret."
+    not_an_answer: "🔐 That does not look like the value I asked for, so the prompt is still open. Send only that value, reply \"skip\" to cancel, or use /stop."
     answered_secret: "✅ answered"
     cancelled: "↩️ Clarification cancelled — your message will be handled as a follow-up."
     expired: "⏳ This prompt expired — please send a new request."
@@ -1083,6 +1085,12 @@ platform:
       clarify_already_answered: "This prompt has already been answered~"
       answered_by: "Answered by {user}: {choice}"
       awaiting_typed: "Awaiting typed response from {user}…"
+      secret_hint: "Click 🔒 Enter privately to answer in a private form, or reply in this channel (I delete the reply when I can)."
+      secret_button: "🔒 Enter privately"
+      secret_modal_title: "Private answer"
+      secret_input_label: "Your answer"
+      secret_received: "✅ Received. Your answer was not posted in the chat."
+      secret_not_owner: "Only the person who started this request can answer it."
     # Model / choice pickers (select placeholders ≤ 150, option label/description ≤ 100).
     picker:
       title: "⚙ Model Configuration"
