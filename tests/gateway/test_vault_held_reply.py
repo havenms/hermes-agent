@@ -128,7 +128,8 @@ async def test_inbound_holds_the_reply_deletes_it_and_posts_the_button_card(capl
     assert released.metadata.get(CLARIFY_BYPASS_KEY) is True
     # The released message is not taken by the open card a second time.
     assert await runner._hm_clarify_reply(released, released.source, KEY) is None
-    assert not entry.event.is_set()
+    # Round 5: "No, that was a message" closes the card, so the message is not stuck behind it.
+    assert entry.response == cm.CANCELLED_BY_MESSAGE
 
 
 @pytest.mark.asyncio

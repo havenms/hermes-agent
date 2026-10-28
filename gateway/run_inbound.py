@@ -446,6 +446,9 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
             return _retain("a typed yes or no while a held reply waits for its buttons")
         if _text_outcome == _clarify_mod.TEXT_HELD:
             return await self._hold_password_reply(_clarify_mod, _pending_clarify, event, source, _raw_clarify_reply)
+        if _text_outcome == _clarify_mod.TEXT_NOT_AN_ANSWER and await self._cancel_card_for_message(
+                _clarify_mod, _pending_clarify, source, _raw_clarify_reply):
+            return None  # the card is closed: the message goes to the agent as a normal turn
         if _text_outcome == _clarify_mod.TEXT_NOT_AN_ANSWER:
             # The reply does not look like the requested value (a chat message after a long wait,
             # not a code or a username). Keep the prompt open and say so. On a secret prompt the
@@ -483,6 +486,43 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
                         logger.debug("Failed to retire clarify card after prose cancellation", exc_info=True)
         return None
 
+    async def _cancel_card_for_message(self, clarify_mod, entry, source, text: str) -> bool:
+        """Close a vault card when the client clearly talks about something else: a question, a
+        greeting with more words, "what's up", or a second reply that does not match. The first plain
+        non-answer only gets the named nudge. A reply that may hold a secret (an email, a
+        secret-shaped word, a value of the card's shape) never closes the card, so it is never routed.
+        True when the card closed; the caller routes the message as a normal turn."""
+        if not entry.owner_user_id or not entry.kind:
+            return False
+        words = text.split()
+        if entry.kind == "code" and entry.answer_pattern and any(re.fullmatch(entry.answer_pattern, w) for w in words):
+            return False  # "the code is 123456": keep it off the agent
+        if any(clarify_mod.looks_like_secret(w) for w in words) or clarify_mod._EMAIL_SHAPE.search(text):
+            return False
+        conversational = clarify_mod.looks_conversational(text)
+        if not conversational and clarify_mod.note_not_an_answer(entry.clarify_id) <= clarify_mod.NUDGES_BEFORE_CANCEL:
+            return False
+        if not clarify_mod.cancel_for_message(entry.clarify_id):
+            return False
+        await self._retire_card_for_message(entry, source)
+        logger.info("Gateway closed a vault card because the client sent another message; routed as a normal "
+                    "turn (session=%s, id=%s, conversational=%s)", entry.session_key, entry.clarify_id, conversational)
+        return True
+
+    async def _retire_card_for_message(self, entry, source) -> None:
+        adapter = self._delivery_adapter_for(source)
+        if adapter is None:
+            return
+        if callable(getattr(type(adapter), "retire_clarify_card", None)):
+            try:
+                await adapter.retire_clarify_card(entry.clarify_id, t("gateway.clarify.paused_for_message"))
+            except Exception:
+                logger.debug("Failed to retire a vault card closed by a message", exc_info=True)
+        try:
+            adapter.resume_typing_for_chat(source.chat_id)
+        except Exception:
+            logger.debug("Failed to resume typing after a vault card closed", exc_info=True)
+
     async def _hold_password_reply(self, clarify_mod, entry, event, source, text: str) -> str:
         """Hold a typed reply to a password card that is not clearly a password.
 
@@ -494,6 +534,9 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
         adapter = self._delivery_adapter_for(source)
 
         async def _release() -> None:
+            # "No, that was a message": close the card first, or the message would wait behind it.
+            if clarify_mod.cancel_for_message(entry.clarify_id):
+                await self._retire_card_for_message(entry, source)
             event.metadata = dict(event.metadata or {})
             event.metadata[CLARIFY_BYPASS_KEY] = True
             target = self._delivery_adapter_for(source)

@@ -282,6 +282,8 @@ def browser_vault_unlock(backend_name: str) -> str:
                                      "session or the Desktop app first.")})
     prompt = get_unlock_prompt_callback()
     master = prompt(backend.name, backend.display_name) if prompt else ""
+    if not master and _cancelled_by_message():
+        return _cancelled_by_message_result(backend.display_name)
     if not master:
         return json.dumps({"success": False, "error_type": "unlock_cancelled",
                            "error": f"The user declined to unlock {backend.display_name}."})
@@ -360,6 +362,8 @@ def browser_vault_save_login(label: str = "", task_id: Optional[str] = None,
         answer = prompt(origin, shown, **_notice_kw(prompt, notice))
     if answer and labels and set((answer.get("extra") or {})) != set(labels):
         answer = None  # the client stopped part way: store nothing half-done
+    if not answer and _cancelled_by_message():
+        return _cancelled_by_message_result(shown)
     if not answer or not answer.get("password") or not answer.get("identifier"):
         return json.dumps({"success": False, "error_type": "save_declined",
                            "error": "The user chose not to save a login for this site. Do not ask again this turn."})
@@ -679,10 +683,30 @@ def browser_vault_enter_code(handle: str = "", task_id: Optional[str] = None) ->
                            "error": (f"{site} asks for a one-time code and this session cannot ask the user (headless/cron/API). "
                                      "Save an authenticator key for this login so codes can be generated automatically.")})
     code = (prompt(site, "", **_notice_kw(prompt, gate)) or "").strip().replace(" ", "").replace("-", "")
+    if not code and _cancelled_by_message():
+        return _cancelled_by_message_result(site)
     if not code:
         return json.dumps({"success": False, "error_type": "code_declined",
                            "error": "The user did not enter a code. Do not ask again this turn."})
     return write(code, "user")
+
+
+def _cancelled_by_message() -> bool:
+    try:
+        from tools.clarify_gateway import pop_cancelled_by_message
+    except Exception:
+        return False
+    return pop_cancelled_by_message()
+
+
+def _cancelled_by_message_result(site: str) -> str:
+    """The client sent another message while the card waited. No value is in this result."""
+    return json.dumps({"success": False, "error_type": "prompt_cancelled_by_client_message", "error": (
+        "The client sent a different message while the login card was open, so the card was closed. "
+        "Their message comes to you next as a normal message. Answer it first. Then offer the login again "
+        f"once, in one short line (for example: \"Whenever you're ready, I still need your {site} login. "
+        "Here's the button.\") and call the same action again. The browser tab is unchanged, so carry on "
+        "from where it stopped. Do not offer it more than once unless the client asks.")})
 
 
 @plugin_errors_as_refusal
@@ -1010,7 +1034,8 @@ BROWSER_VAULT_SCHEMA = {
         "retry_limit, account_locked, device_check or retries_left=0, stop and send the takeover link. "
         "Prefer the login prompt over asking in chat. If the client "
         "already pasted a login, save it with save_login and use it; do not refuse. Never repeat a password, card "
-        "number, CVC or code back in a message. Stop on save_declined; never retry payment_declined."
+        "number, CVC or code back in a message. Stop on save_declined; never retry payment_declined. On "
+        "prompt_cancelled_by_client_message, answer the client's message first, then offer the login once more."
     ),
     "parameters": {
         "type": "object",

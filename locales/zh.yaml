@@ -664,6 +664,7 @@ gateway:
     answered_secret: "✅ 已回答"
     secret_not_deleted: "🔒 请删除你的上一条消息。里面有你的密码或验证码，我没能删除它。"
     not_an_answer: "🔐 我还在等上面请你提供的内容。请只回复那个内容，或回复 skip 停止。"
+    paused_for_message: "No problem. I paused the login so I can answer your message first."
     not_an_answer_named: "🔐 I am still waiting for {need}. Please reply with just that. If you want to stop, say stop."
     try_private_again: "Tap 🔒 Enter privately and try again."
     form_not_identifier: "That does not look like an email address or username. Tap 🔒 Enter privately and try again."

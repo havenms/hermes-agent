@@ -644,7 +644,8 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
         A typed ``skip`` is a decline too: it must never reach the vault as a value.
         """
         from gateway.vault_prompts import vault_prompt_timeout
-        from tools.clarify_gateway import CANCELLED, SKIPPED
+        from tools.clarify_gateway import CANCELLED, CANCELLED_BY_MESSAGE, SKIPPED, mark_cancelled_by_message
+        mark_cancelled_by_message(False)
         owner = getattr(getattr(self._ctx, "source", None), "user_id", None)
         timeout = vault_prompt_timeout(kind)
         logger.info("Vault prompt dispatched (kind=%s, secret=%s, last=%s, owner_bound=%s, timeout=%ss)",
@@ -654,6 +655,10 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
             answer_pattern=answer_pattern, timeout=timeout, chat_guard=chat_guard, kind=kind,
             form_fields=form_fields, need=need)
         logger.info("Vault prompt %s (kind=%s, secret=%s)", "answered" if answered else "unanswered", kind, secret)
+        if response == CANCELLED_BY_MESSAGE:
+            # The client said something else; the tool tells the model to answer it first.
+            mark_cancelled_by_message(True)
+            return ""
         if not answered or response in (SKIPPED, CANCELLED):
             return ""
         return response

@@ -664,6 +664,7 @@ gateway:
     answered_secret: "✅ yanıtlandı"
     secret_not_deleted: "🔒 Lütfen son mesajını sil. İçinde şifren veya kodun var ve ben kaldıramadım."
     not_an_answer: "🔐 Yukarıda istediğim şeyi hâlâ bekliyorum. Yalnızca onu yaz ya da durmak için skip yaz."
+    paused_for_message: "No problem. I paused the login so I can answer your message first."
     not_an_answer_named: "🔐 I am still waiting for {need}. Please reply with just that. If you want to stop, say stop."
     try_private_again: "Tap 🔒 Enter privately and try again."
     form_not_identifier: "That does not look like an email address or username. Tap 🔒 Enter privately and try again."

@@ -773,6 +773,7 @@ gateway:
     answered_secret: "✅ répondu"
     secret_not_deleted: "🔒 Supprime ton dernier message, s'il te plaît. Il contient ton mot de passe ou ton code, et je n'ai pas pu le retirer."
     not_an_answer: "🔐 J'attends encore ce que j'ai demandé plus haut. Réponds seulement avec ça, ou réponds skip pour arrêter."
+    paused_for_message: "No problem. I paused the login so I can answer your message first."
     not_an_answer_named: "🔐 I am still waiting for {need}. Please reply with just that. If you want to stop, say stop."
     try_private_again: "Tap 🔒 Enter privately and try again."
     form_not_identifier: "That does not look like an email address or username. Tap 🔒 Enter privately and try again."

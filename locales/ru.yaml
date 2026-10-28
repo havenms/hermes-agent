@@ -664,6 +664,7 @@ gateway:
     answered_secret: "✅ получен ответ"
     secret_not_deleted: "🔒 Пожалуйста, удалите ваше последнее сообщение. В нём пароль или код, а я не смог его убрать."
     not_an_answer: "🔐 Я всё ещё жду то, что попросил выше. Ответьте только этим или ответьте skip, чтобы остановиться."
+    paused_for_message: "No problem. I paused the login so I can answer your message first."
     not_an_answer_named: "🔐 I am still waiting for {need}. Please reply with just that. If you want to stop, say stop."
     try_private_again: "Tap 🔒 Enter privately and try again."
     form_not_identifier: "That does not look like an email address or username. Tap 🔒 Enter privately and try again."

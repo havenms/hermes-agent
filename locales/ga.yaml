@@ -664,6 +664,7 @@ gateway:
     answered_secret: "✅ freagartha"
     secret_not_deleted: "🔒 Scrios do theachtaireacht dheireanach, le do thoil. Tá do phasfhocal nó do chód inti, agus níorbh fhéidir liom í a bhaint."
     not_an_answer: "🔐 Táim fós ag fanacht leis an rud a d'iarr mé thuas. Freagair leis sin amháin, nó freagair skip chun stopadh."
+    paused_for_message: "No problem. I paused the login so I can answer your message first."
     not_an_answer_named: "🔐 I am still waiting for {need}. Please reply with just that. If you want to stop, say stop."
     try_private_again: "Tap 🔒 Enter privately and try again."
     form_not_identifier: "That does not look like an email address or username. Tap 🔒 Enter privately and try again."

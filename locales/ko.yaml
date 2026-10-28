@@ -664,6 +664,7 @@ gateway:
     answered_secret: "✅ 답변됨"
     secret_not_deleted: "🔒 마지막 메시지를 삭제해 주세요. 비밀번호나 코드가 들어 있는데 제가 지우지 못했습니다."
     not_an_answer: "🔐 위에서 부탁드린 것을 아직 기다리고 있습니다. 그것만 답장하시거나, 그만하려면 skip이라고 답장하세요."
+    paused_for_message: "No problem. I paused the login so I can answer your message first."
     not_an_answer_named: "🔐 I am still waiting for {need}. Please reply with just that. If you want to stop, say stop."
     try_private_again: "Tap 🔒 Enter privately and try again."
     form_not_identifier: "That does not look like an email address or username. Tap 🔒 Enter privately and try again."

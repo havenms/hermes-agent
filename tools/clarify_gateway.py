@@ -256,6 +256,66 @@ WRONG_ANSWER = "\x00wrong"
 # Marks a response that came from one private form (see ``_ClarifyEntry.form_fields``).
 FORM_ANSWER_PREFIX = "\x00form:"
 CANCELLED = "\x00cancelled"
+# The client sent a chat message while a vault card waited, so the gateway closed the card and routes
+# the message to the agent as a normal turn. The vault tool reports prompt_cancelled_by_client_message.
+CANCELLED_BY_MESSAGE = "\x00cancelled_by_message"
+# After this many replies that do not match a vault card, the next one closes the card.
+NUDGES_BEFORE_CANCEL = 1
+_GREETINGS = ("hi", "hey", "hello", "yo", "hiya", "ok", "okay", "so")
+_QUESTION_OPENERS = ("what", "why", "how", "when", "where", "who", "which", "can", "could", "would",
+                     "will", "do", "does", "did", "is", "are", "should", "any", "tell", "please")
+_CHAT_PHRASES = frozenset({"what's up", "whats up", "wassup", "sup", "how are you", "what is up",
+                           "what are you doing", "are you there", "you there"})
+_cancel_marker = threading.local()
+
+
+def looks_conversational(text: str) -> bool:
+    """True when a typed reply to a vault card is clearly the client talking to the bot: a question,
+    a greeting with more words, or a chat phrase ("what's up"). An email, a link or a secret-shaped
+    word is never conversational here (the card keeps it, and the gateway scrubs it)."""
+    stripped = str(text or "").strip()
+    if not stripped:
+        return False
+    if _EMAIL_SHAPE.search(stripped) or any(looks_like_secret(w) for w in stripped.split()):
+        return False
+    norm = _norm_word(stripped)
+    if norm in _CHAT_PHRASES:
+        return True
+    words = norm.split()
+    if "?" in stripped and len(words) >= 2:
+        return True
+    # A greeting alone ("hi there") is not enough; a greeting before a question is ("hey can you ...").
+    words = [w.strip(",.!") for w in words]
+    while words and (words[0] in _GREETINGS or words[0] == "there"):
+        words = words[1:]
+    return len(words) >= 3 and words[0] in _QUESTION_OPENERS
+
+
+def note_not_an_answer(clarify_id: str) -> int:
+    """Count one reply that did not match the card; returns the count so far (0 if the card is gone)."""
+    with _lock:
+        entry = _entries.get(clarify_id)
+        if entry is None:
+            return 0
+        entry.nudges += 1
+        return entry.nudges
+
+
+def cancel_for_message(clarify_id: str) -> bool:
+    """Close an open card because the client said something else. True when this call closed it."""
+    return resolve_gateway_clarify(clarify_id, CANCELLED_BY_MESSAGE)
+
+
+def mark_cancelled_by_message(value: bool = True) -> None:
+    """Set by the gateway's vault ask (same thread as the tool) when a card closed this way."""
+    _cancel_marker.value = bool(value)
+
+
+def pop_cancelled_by_message() -> bool:
+    """True once after a vault card closed because the client sent another message."""
+    value = bool(getattr(_cancel_marker, "value", False))
+    _cancel_marker.value = False
+    return value
 
 
 def register(clarify_id: str, session_key: str, question: str, choices: Optional[list[str]],

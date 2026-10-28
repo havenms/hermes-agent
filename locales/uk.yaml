@@ -664,6 +664,7 @@ gateway:
     answered_secret: "✅ отримано відповідь"
     secret_not_deleted: "🔒 Будь ласка, видаліть ваше останнє повідомлення. У ньому пароль або код, а я не зміг його прибрати."
     not_an_answer: "🔐 Я досі чекаю на те, що попросив вище. Відповідайте лише цим або відповідайте skip, щоб зупинитися."
+    paused_for_message: "No problem. I paused the login so I can answer your message first."
     not_an_answer_named: "🔐 I am still waiting for {need}. Please reply with just that. If you want to stop, say stop."
     try_private_again: "Tap 🔒 Enter privately and try again."
     form_not_identifier: "That does not look like an email address or username. Tap 🔒 Enter privately and try again."

@@ -670,6 +670,7 @@ gateway:
     answered: "✅ answered: {response}"
     secret_not_deleted: "🔒 Please delete your last message. It has your password or code in it, and I could not remove it."
     not_an_answer: "🔐 I am still waiting for what I asked for above. Reply with only that, or tell me if you want to stop."
+    paused_for_message: "No problem. I paused the login so I can answer your message first."
     not_an_answer_named: "🔐 I am still waiting for {need}. Please reply with just that. If you want to stop, say stop."
     try_private_again: "Tap 🔒 Enter privately and try again."
     form_not_identifier: "That does not look like an email address or username. Tap 🔒 Enter privately and try again."
