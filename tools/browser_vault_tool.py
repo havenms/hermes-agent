@@ -338,7 +338,12 @@ def browser_vault_save_login(label: str = "", task_id: Optional[str] = None,
     filled = json.loads(browser_vault_fill(meta.id, task_id=effective_task_id))
     out = {"success": True, "handle": meta.id, "origin": origin, "identifier": identifier,
            "identifier_type": id_type, "fill": filled,
-           "next": "Type the identifier into the username field if the form has one, then submit."}
+           "next": "Type the identifier into the username field if the form has one, then submit.",
+           "if_rejected": _password_rejected_hint(origin)}
+    if not (isinstance(filled, dict) and filled.get("success")):
+        out["password_typed"] = False
+        out["next"] = ("The login is saved, but the password could not be typed into this page. Open the sign-in "
+                       "form, then call browser_vault action=fill with this handle.")
     if pasted:
         out["source"] = "pasted"
         out["chat_message_removed"] = _scrub_pasted_message()
@@ -346,6 +351,15 @@ def browser_vault_save_login(label: str = "", task_id: Optional[str] = None,
                         " The client's message with the password is still in the chat: ask them to delete it. "
                         "Never repeat the password in a message.")
     return json.dumps(out, ensure_ascii=False)
+
+
+def _password_rejected_hint(origin: str) -> str:
+    """What the bot does when the site refuses the password, in words it can pass to the client."""
+    host = str(origin or "").split("://", 1)[-1] or "the site"
+    return (f"After you submit: if the page shows an error such as a wrong password, or still shows the sign-in "
+            f"form, THE PASSWORD DID NOT WORK. Tell the client in plain words, for example: \"That password did "
+            f"not work on {host}. Could you check it and send it again?\" Then call save_login again. Never "
+            "repeat the password.")
 
 
 def _scrub_pasted_message() -> bool:
@@ -601,6 +615,9 @@ def _fill_bound_page(backend: Any, handle: str, meta: Any, page_origin: str, eff
     if meta.kind == "login":
         out["next"] = ("Submit. If the site then asks for a verification code, call browser_vault action=enter_code with this handle"
                        + (" (a code will be generated automatically)." if meta.has_otp else "."))
+        out["if_rejected"] = _password_rejected_hint(page_origin)
+    elif not filled:
+        out["error"] = "The saved value could not be typed into this page: no matching field was found."
     if meta.kind != "login":
         out["fields"] = sorted(f["token"] for f in fills)  # which controls were targeted, never the values
     return json.dumps(out)

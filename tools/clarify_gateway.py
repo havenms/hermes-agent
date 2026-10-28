@@ -39,6 +39,13 @@ class _ClarifyEntry:
     # (``skip`` always counts). A vault prompt can wait for hours; without this the first
     # unrelated message after the wait would be taken as the username or the one-time code.
     answer_pattern: Optional[str] = None
+    # A typed reply to a password prompt that reads like chat ("hey did that work?") is never
+    # taken as the password (see :func:`looks_like_chat`). The private form path skips this.
+    chat_guard: bool = False
+    # What the prompt asks for (vault prompts: "save_login", "code", "unlock"); lets an adapter
+    # word its private-entry hint. Empty for ordinary clarify questions.
+    kind: str = ""
+    created_at: float = field(default_factory=time.monotonic)
     event: threading.Event = field(default_factory=threading.Event)
     response: Optional[str] = None
     awaiting_text: bool = False  # set when user picked "Other" or clarify is open-ended
@@ -58,6 +65,30 @@ TEXT_REJECTED_SELECTION = "rejected_selection"
 TEXT_NO_PENDING = "no_pending"
 TEXT_NOT_OWNER = "not_owner"
 TEXT_NOT_AN_ANSWER = "not_an_answer"
+TEXT_LOOKS_LIKE_CHAT = "looks_like_chat"
+
+# After this many seconds a typed password reply must be one token: a client who comes back
+# hours later usually types chat first.
+CHAT_GUARD_STALE_AFTER_S = 15 * 60
+_CHAT_OPENERS = ("hi", "hey", "hello", "ok", "okay", "thanks", "did", "is", "are", "can", "what",
+                 "why", "how", "when", "where", "any update", "still")
+
+
+def looks_like_chat(text: str, *, stale: bool = False) -> bool:
+    """True when a typed reply to a password prompt reads like a chat message, not a password:
+    3 or more words, a "?", or a common opener. ``stale`` (the card is older than
+    ``CHAT_GUARD_STALE_AFTER_S``) accepts only a reply without whitespace. A passphrase with
+    spaces still goes through the private form, which skips this check."""
+    stripped = str(text or "").strip()
+    if not stripped:
+        return False
+    if stale and any(ch.isspace() for ch in stripped):
+        return True
+    lowered = stripped.casefold()
+    if "?" in stripped or len(stripped.split()) >= 3:
+        return True
+    return any(lowered == w or lowered.startswith(w + " ") or lowered.startswith(w + ",")
+               or lowered.startswith(w + "!") or lowered.startswith(w + ".") for w in _CHAT_OPENERS)
 SKIP_WORD = "skip"
 SKIPPED = "\x00skipped"
 CANCELLED = "\x00cancelled"
@@ -65,7 +96,8 @@ CANCELLED = "\x00cancelled"
 
 def register(clarify_id: str, session_key: str, question: str, choices: Optional[list[str]],
              multi_select: bool = False, secret: bool = False,
-             owner_user_id: Optional[str] = None, answer_pattern: Optional[str] = None) -> _ClarifyEntry:
+             owner_user_id: Optional[str] = None, answer_pattern: Optional[str] = None,
+             chat_guard: bool = False, kind: str = "") -> _ClarifyEntry:
     """Register a pending clarify request; caller then blocks on ``wait_for_response``.
     Open-ended (no choices) entries start in text mode: the next message IS the response.
     ``secret`` marks an answer the adapter should delete from the chat once read.
@@ -74,7 +106,7 @@ def register(clarify_id: str, session_key: str, question: str, choices: Optional
     entry = _ClarifyEntry(clarify_id, session_key, question, list(choices) if choices else None,
                           bool(multi_select) and bool(choices), secret=bool(secret),
                           owner_user_id=str(owner_user_id) if owner_user_id else None,
-                          answer_pattern=answer_pattern or None,
+                          answer_pattern=answer_pattern or None, chat_guard=bool(chat_guard), kind=kind or "",
                           awaiting_text=not bool(choices))
     with _lock:
         _entries[clarify_id] = entry
@@ -283,12 +315,17 @@ def attempt_text_response_for_entry(clarify_id: str, response: str,
     entry = get_pending(clarify_id)
     if entry is None:
         return TEXT_NO_PENDING
-    return _attempt_text_response(entry, response, responder_id)
+    return _attempt_text_response(entry, response, responder_id, private_form=True)
 
 
-def _attempt_text_response(entry: _ClarifyEntry, response: str, responder_id: Optional[str]) -> str:
+def _attempt_text_response(entry: _ClarifyEntry, response: str, responder_id: Optional[str],
+                           private_form: bool = False) -> str:
     if not may_answer(entry, responder_id):
         return TEXT_NOT_OWNER
+    text = str(response).strip()
+    if (entry.chat_guard and not private_form and text.casefold() != SKIP_WORD
+            and looks_like_chat(text, stale=time.monotonic() - entry.created_at > CHAT_GUARD_STALE_AFTER_S)):
+        return TEXT_LOOKS_LIKE_CHAT
     coerced, reason = _coerce_text_response_detailed(entry, response)
     if coerced is None:
         if reason == "not_an_answer":
@@ -311,6 +348,13 @@ def mark_awaiting_text(clarify_id: str) -> bool:
         if entry is not None:
             entry.awaiting_text = True
         return entry is not None
+
+
+def has_pending_owner_prompt(session_key: str) -> bool:
+    """True while the session has an unanswered prompt bound to one user (a vault prompt)."""
+    with _lock:
+        return any(e is not None and e.owner_user_id and not e.event.is_set()
+                   for e in (_entries.get(cid) for cid in _session_index.get(session_key) or []))
 
 
 def has_pending(session_key: str) -> bool:

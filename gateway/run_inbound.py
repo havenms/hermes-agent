@@ -430,6 +430,17 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
             return ""
         if _text_outcome == _clarify_mod.TEXT_NOT_OWNER:
             return None  # an older owner-bound entry took the slot between the check and the attempt
+        if _text_outcome == _clarify_mod.TEXT_LOOKS_LIKE_CHAT:
+            # A typed reply to a password prompt that reads like chat ("hey did that work?"). Never
+            # take it as the password and never delete it. Ask, keep the prompt open, and let the
+            # message continue as normal chat: while an owner-bound prompt waits, busy routing
+            # queues it instead of interrupting the turn (run_busy), so the prompt survives.
+            logger.info("Gateway kept a password prompt open: the typed reply reads like chat "
+                        "(session=%s, id=%s)", _quick_key, _pending_clarify.clarify_id)
+            _clarify_adapter = self._delivery_adapter_for(source)
+            if _clarify_adapter:
+                await self._send_unanchored_notice(_clarify_adapter, source, t("gateway.clarify.is_that_your_password"))
+            return None
         if _text_outcome == _clarify_mod.TEXT_NOT_AN_ANSWER:
             # The reply does not look like the requested value (a chat message after a long wait,
             # not a code or a username). Keep the prompt open and say so. On a secret prompt the

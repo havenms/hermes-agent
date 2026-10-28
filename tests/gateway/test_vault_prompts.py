@@ -36,7 +36,7 @@ class _Recorder:
         self.kinds = []
         self.patterns = []
 
-    def __call__(self, question, secret=False, last=True, kind="code", answer_pattern=None):
+    def __call__(self, question, secret=False, last=True, kind="code", answer_pattern=None, **_):
         self.questions.append(question)
         self.secret_flags.append(secret)
         self.last_flags.append(last)

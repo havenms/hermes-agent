@@ -5841,9 +5841,11 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
                 )
             else:
                 hint, view = self._secret_prompt_view(clarify_id)
-            content = self._self_contained_prompt_content(
-                f"❓ **{clarify_title}**", str(question or "").strip(), tail=f"\n\n{hint}",
-            )
+            body, tail = str(question or "").strip(), f"\n\n{hint}"
+            if view is not None and not clean_choices:
+                # A secret card leads with the private route; a typed reply is the fallback.
+                body, tail = f"**{hint}**\n\n{body}", ""
+            content = self._self_contained_prompt_content(f"❓ **{clarify_title}**", body, tail=tail)
             send_kwargs = {"content": content, "embed": embed}
             if view:
                 send_kwargs["view"] = view
@@ -5871,7 +5873,8 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
         )
         self._secret_prompt_views[clarify_id] = view
         view.on_closed = lambda: self._secret_prompt_views.pop(clarify_id, None)
-        return t("platform.discord.prompt.secret_hint"), view
+        key = "secret_hint_password" if entry.kind in ("save_login", "unlock") else "secret_hint"
+        return t(f"platform.discord.prompt.{key}"), view
 
     async def retire_clarify_card(self, clarify_id: str, notice: str) -> None:
         """Close a secret prompt's button when the prompt ends without the modal (typed answer,

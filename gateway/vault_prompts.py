@@ -33,7 +33,7 @@ from agent.vault_backends.unlock import (
 
 logger = logging.getLogger(__name__)
 
-# A surface's blocking ask: (question, secret, last, kind, answer_pattern) -> the user's reply,
+# A surface's blocking ask: (question, secret, last, kind, answer_pattern, chat_guard) -> the reply,
 # "" when unanswered. ``last`` tells the surface whether another question follows in this
 # sequence, so it can hold the stream/typing re-arm for the final one (same contract as the
 # clarify batch). ``kind`` picks the wait (:func:`vault_prompt_timeout`). ``answer_pattern`` is a
@@ -90,7 +90,7 @@ def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
         return _clean(ask(
             f"🔐 To use the passwords you keep in {name}, I need its main password.\n\n"
             "Reply with it here. I use it once to open it, I do not keep it, and I remove your message.",
-            secret=True, last=True, kind="unlock",
+            secret=True, last=True, kind="unlock", chat_guard=True,
         ))
 
     def save_login_prompt(origin: str, site_label: str) -> Optional[dict[str, str]]:
@@ -111,9 +111,10 @@ def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
         if not identifier:
             return None
         password = ask(
-            f"🔑 Thanks! Now reply with the password for {identifier} (2/2).\n\n"
-            "I'll type it in and remove your message. If the email or username is wrong, reply skip.",
-            secret=True, last=True, kind="save_login",
+            f"🔑 Thanks! Now I need the password for {identifier} (2/2).\n\n"
+            "You can also reply here with just the password. I'll type it in and remove your message. "
+            "If the email or username is wrong, reply skip.",
+            secret=True, last=True, kind="save_login", chat_guard=True,
         )
         if not password:
             return None

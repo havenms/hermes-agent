@@ -692,6 +692,10 @@ class GatewayBusySessionMixin:
         )
         if demoted_for_compression:
             effective_mode = self._demote_interrupt(session_key, "context compression is in flight (#56391)")
+        if effective_mode == "interrupt" and _owner_prompt_pending(session_key):
+            # A vault prompt waits for one user (possibly for hours). An interrupt would cancel it;
+            # queue the message for after the turn instead. /stop and /new still cancel.
+            effective_mode = self._demote_interrupt(session_key, "a login prompt is waiting for its user")
         steered = redirected = False
         agent_live = running_agent is not None and running_agent is not _AGENT_PENDING_SENTINEL
         plain_text = (
@@ -1650,3 +1654,12 @@ class GatewayBusySessionMixin:
         except Exception:
             return {}
         return cfg if isinstance(cfg, dict) else {}
+
+
+def _owner_prompt_pending(session_key: str) -> bool:
+    """True while ``session_key`` has an unanswered owner-bound (vault) prompt."""
+    try:
+        from tools.clarify_gateway import has_pending_owner_prompt
+        return has_pending_owner_prompt(session_key)
+    except Exception:  # health: allow BLE001 -- a probe failure keeps the configured mode
+        return False
