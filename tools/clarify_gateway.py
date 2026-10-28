@@ -90,6 +90,15 @@ def looks_like_chat(text: str, *, stale: bool = False) -> bool:
     return any(lowered == w or lowered.startswith(w + " ") or lowered.startswith(w + ",")
                or lowered.startswith(w + "!") or lowered.startswith(w + ".") for w in _CHAT_OPENERS)
 SKIP_WORD = "skip"
+# Typed words that decline a prompt bound to one user (vault prompts). The cards say "just tell
+# me" instead of teaching a command; these keep working without being shown.
+DECLINE_WORDS = frozenset({"skip", "wrong", "cancel", "stop", "wrong email", "wrong username", "that's wrong",
+                           "thats wrong", "it's wrong", "its wrong"})
+
+
+def _is_decline(entry: "_ClarifyEntry", text: str) -> bool:
+    word = " ".join(str(text or "").casefold().replace("\u2019", "'").split()).rstrip(".!")
+    return word == SKIP_WORD or (entry.owner_user_id is not None and word in DECLINE_WORDS)
 SKIPPED = "\x00skipped"
 CANCELLED = "\x00cancelled"
 
@@ -254,7 +263,7 @@ def _coerce_text_response_detailed(entry: _ClarifyEntry, response: str) -> tuple
     ``awaiting_text`` accept any text; numeric picks and exact labels always resolve; multi-select
     returns a JSON array string (decoded tool-side); one bad token rejects the whole reply."""
     text = str(response).strip()
-    is_skip = text.casefold() == SKIP_WORD
+    is_skip = _is_decline(entry, text)
     if not entry.choices:
         if is_skip:
             return SKIPPED, None
@@ -323,7 +332,7 @@ def _attempt_text_response(entry: _ClarifyEntry, response: str, responder_id: Op
     if not may_answer(entry, responder_id):
         return TEXT_NOT_OWNER
     text = str(response).strip()
-    if (entry.chat_guard and not private_form and text.casefold() != SKIP_WORD
+    if (entry.chat_guard and not private_form and not _is_decline(entry, text)
             and looks_like_chat(text, stale=time.monotonic() - entry.created_at > CHAT_GUARD_STALE_AFTER_S)):
         return TEXT_LOOKS_LIKE_CHAT
     coerced, reason = _coerce_text_response_detailed(entry, response)
