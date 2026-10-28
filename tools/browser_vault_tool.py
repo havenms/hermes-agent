@@ -21,6 +21,10 @@ paid per request) and available wherever a browser is. Its actions:
 - ``enter_code`` → a one-time code for the current page: minted from a saved
   login's authenticator key (same origin binding as ``fill``, checked before
   the code is generated) or typed by the user into their surface's prompt.
+- ``check`` → after a submit: did the site take what the vault typed? One
+  outcome check for every secret (see ``agent/vault_outcome.py``). A rejection
+  names the field and the reason, the next card tells the client, and a third
+  retry, a locked sign-in or a device check go to the takeover link.
 
 Ported design from Merit-Systems/OpenInstinct (MIT): opaque-handle vault
 autofill (kernel-login-autofill.ts / fill_from_vault.ts).
@@ -31,6 +35,7 @@ from __future__ import annotations
 import json
 import secrets
 import logging
+import time
 from typing import Any, Dict, Optional
 
 from tools.browser_vault_context import plugin_errors_as_refusal, saved_origins, snapshot_refusal, write_backend_code
@@ -337,6 +342,11 @@ def browser_vault_save_login(label: str = "", task_id: Optional[str] = None,
     # The prompt names the site the way the client knows it: the model's label ("TestCo Books"), then
     # the page title, and only then the host.
     shown = label.strip() or _page_title(effective_task_id) or host
+    # A field the site refused before: the card says which one, and a capped field is not asked again.
+    gate = _retry_gate(effective_task_id, origin, ["identifier", "password", *labels], shown)
+    if isinstance(gate, dict):
+        return json.dumps(gate, ensure_ascii=False)
+    notice = gate
     if pasted:
         answer = {"identifier": str(identifier).strip(), "password": str(password),
                   **({"extra": {lb: str(pasted_extra[lb]) for lb in labels}} if labels else {})}
@@ -345,9 +355,9 @@ def browser_vault_save_login(label: str = "", task_id: Optional[str] = None,
             return json.dumps({"success": False, "error_type": "extra_fields_unsupported", "error": (
                 "This surface can only ask for an email and a password. Ask the client to send the other "
                 f"fields ({', '.join(labels)}) in chat, then call save_login with identifier, password and extra.")})
-        answer = prompt(origin, shown, extra_fields=tuple(labels))
+        answer = prompt(origin, shown, extra_fields=tuple(labels), **_notice_kw(prompt, notice))
     else:
-        answer = prompt(origin, shown)
+        answer = prompt(origin, shown, **_notice_kw(prompt, notice))
     if answer and labels and set((answer.get("extra") or {})) != set(labels):
         answer = None  # the client stopped part way: store nothing half-done
     if not answer or not answer.get("password") or not answer.get("identifier"):
@@ -394,10 +404,90 @@ def browser_vault_save_login(label: str = "", task_id: Optional[str] = None,
 def _password_rejected_hint(origin: str) -> str:
     """What the bot does when the site refuses the password, in words it can pass to the client."""
     host = str(origin or "").split("://", 1)[-1] or "the site"
-    return (f"After you submit: if the page shows an error such as a wrong password, or still shows the sign-in "
-            f"form, THE PASSWORD DID NOT WORK. Tell the client in plain words, for example: \"That password did "
-            f"not work on {host}. Could you check it and send it again?\" Then call save_login again. Never "
-            "repeat the password.")
+    return (f"After you submit, call browser_vault action=check. If it says credential_rejected, or the page "
+            f"shows an error such as a wrong password, THE PASSWORD DID NOT WORK on {host}. Tell the client "
+            "which thing did not work, in plain words (check gives the line). Then call save_login again. "
+            "Never re-ask silently. Never repeat the password.")
+
+
+def _accepts_kw(fn: Any, name: str) -> bool:
+    """True when ``fn`` takes the keyword ``name`` (or any keyword)."""
+    import inspect
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return name in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
+def _notice_kw(prompt: Any, notice: str) -> dict:
+    """``{"notice": ...}`` for a prompt that can show the "that did not work" line, else ``{}``."""
+    return {"notice": notice} if notice and _accepts_kw(prompt, "notice") else {}
+
+
+def _retry_gate(task_id: str, origin: str, fields: list, site: str) -> "str | dict":
+    """Before a card asks again: the refusal dict when the field hit the retry cap (or the site locked
+    the sign-in or wants a device check), else the plain line the card starts with ("" = none)."""
+    from agent.vault_outcome import TRACKER, blocked_result, retry_line
+    pending = TRACKER.pending(task_id, origin, fields)
+    if pending is None:
+        return ""
+    if pending["blocked"]:
+        return blocked_result(pending, site)
+    return retry_line(pending["field"], pending["reason"], site)
+
+
+def _check_settle_s() -> float:
+    """Seconds the outcome check waits for the page to settle (``browser.vault_check_settle``)."""
+    try:
+        from tools.browser_session_cloud import browser_cfg
+        value = float(browser_cfg("vault_check_settle", 6.0, float))
+    except Exception:  # health: allow BLE001 -- a config read failure keeps the default wait
+        return 6.0
+    return max(0.0, min(value, 20.0)) if value == value else 6.0
+
+
+def _page_verdict(task_id: str, filled: list, settle: float) -> Optional[dict]:
+    """Read the page (no values) until it shows an outcome or ``settle`` seconds pass. None when the
+    page cannot be read. An ``unknown`` verdict means the same form is still there with no error."""
+    from agent.vault_outcome import build_snapshot_js, classify_outcome
+    deadline = time.monotonic() + max(0.0, settle)
+    while True:
+        res = _eval_js(task_id, build_snapshot_js())
+        snap = _parse_json_result(res.get("result")) if isinstance(res, dict) and res.get("success") else None
+        if isinstance(snap, str):
+            snap = _parse_json_result(snap)
+        verdict = classify_outcome(snap, filled)
+        if verdict is None or verdict["outcome"] != "unknown" or time.monotonic() >= deadline:
+            return verdict
+        time.sleep(0.5)
+
+
+def _site_of(origin: str) -> str:
+    return str(origin or "").split("://", 1)[-1] or "the site"
+
+
+@plugin_errors_as_refusal
+def browser_vault_check(task_id: Optional[str] = None, label: str = "") -> str:
+    """After a submit: did the site accept what the vault typed last (password, extras, code)?
+
+    One result shape for every secret, never with a value: ``{"success": true, "outcome":
+    "accepted"}``, or ``{"success": false, "error_type": "credential_rejected", "field", "reason",
+    "message", "retries_left", "tell_client", "next"}``. The rejection is kept for the next card."""
+    from agent.vault_outcome import TRACKER, rejected_result
+
+    effective_task_id = task_id or "default"
+    origin, filled = TRACKER.last_filled(effective_task_id)
+    origin = origin or _current_page_origin(effective_task_id) or ""
+    verdict = _page_verdict(effective_task_id, filled, _check_settle_s())
+    if verdict is None:
+        return json.dumps({"success": False, "error_type": "page_unreadable",
+                           "error": "Could not read the page. Look at it with the browser tools."})
+    record = TRACKER.record(effective_task_id, origin, verdict)
+    if verdict["outcome"] == "accepted":
+        return json.dumps({"success": True, "outcome": "accepted", "origin": origin,
+                           "next": "The site took it. Carry on, and prove it works on a page that shows data."})
+    return json.dumps(rejected_result(verdict, record, label.strip() or _site_of(origin)), ensure_ascii=False)
 
 
 def _extra_labels(extra_fields: Any, pasted_extra: dict) -> list[str] | str:
@@ -500,6 +590,10 @@ def browser_vault_enter_code(handle: str = "", task_id: Optional[str] = None) ->
         if not origin:
             return json.dumps({"success": False, "error": "No page with a code field is open."})
     site = origin.split("://", 1)[-1]
+    shown = (getattr(meta, "label", "") or "").strip() or site
+    gate = _retry_gate(effective_task_id, origin, ["code"], shown)
+    if isinstance(gate, dict):
+        return json.dumps(gate, ensure_ascii=False)
 
     nonce = secrets.token_hex(8)
     inspect = _eval_js(effective_task_id, build_inspection_js(nonce))
@@ -525,8 +619,27 @@ def browser_vault_enter_code(handle: str = "", task_id: Optional[str] = None) ->
         if isinstance(parsed, dict) and parsed.get("refused") == "origin_changed":
             return json.dumps({"success": False, "error_type": "origin_changed", "error": "The page navigated before the code could be entered. Nothing was written."})
         filled = int(parsed.get("filled", 0)) if isinstance(parsed, dict) else 0
-        return json.dumps({"success": bool(filled), "filled_fields": filled, "origin": origin, "source": source,
-                           "next": "Submit the form (many sites auto-submit when the last digit lands)."})
+        out = {"success": bool(filled), "filled_fields": filled, "origin": origin, "source": source,
+               "next": "Submit the form (many sites auto-submit when the last digit lands), then call "
+                       "browser_vault action=check."}
+        if filled:
+            out.update(_after_code(origin))
+        return json.dumps(out, ensure_ascii=False)
+
+    def _after_code(origin: str) -> dict:
+        """Many sites submit the code by themselves: look once the page settles. A rejection replaces
+        the result; a page that did not move on yet leaves the check to the model."""
+        from agent.vault_outcome import TRACKER, rejected_result
+        TRACKER.note_filled(effective_task_id, origin, ["code"])
+        verdict = _page_verdict(effective_task_id, ["code"], _check_settle_s())
+        if verdict is None:
+            return {}
+        if verdict["outcome"] == "unknown":
+            return {"outcome": "pending"}
+        record = TRACKER.record(effective_task_id, origin, verdict)
+        if verdict["outcome"] == "accepted":
+            return {"outcome": "accepted", "next": "The site took the code. Carry on."}
+        return rejected_result(verdict, record, shown)
 
     if meta is not None:  # a saved login on its bound origin: mint + write inside the backend's fill_context
         written = write_backend_code(backend, handle, meta, origin, lambda code: write(code, backend.name))
@@ -537,7 +650,7 @@ def browser_vault_enter_code(handle: str = "", task_id: Optional[str] = None) ->
         return json.dumps({"success": False, "error_type": "prompt_unavailable",
                            "error": (f"{site} asks for a one-time code and this session cannot ask the user (headless/cron/API). "
                                      "Save an authenticator key for this login so codes can be generated automatically.")})
-    code = (prompt(site, "") or "").strip().replace(" ", "").replace("-", "")
+    code = (prompt(site, "", **_notice_kw(prompt, gate)) or "").strip().replace(" ", "").replace("-", "")
     if not code:
         return json.dumps({"success": False, "error_type": "code_declined",
                            "error": "The user did not enter a code. Do not ask again this turn."})
@@ -710,7 +823,12 @@ def _fill_bound_page(backend: Any, handle: str, meta: Any, page_origin: str, eff
             out["extra_hint"] = ("No field on this page matched " + ", ".join(extra_unmatched) + ". When it shows, call "
                                  "browser_vault action=fill_field with this handle, field=<label> and ref=<CSS selector>.")
     if meta.kind == "login":
-        out["next"] = ("Submit. If the site then asks for a verification code, call browser_vault action=enter_code with this handle"
+        if filled:
+            from agent.vault_outcome import TRACKER
+            TRACKER.note_filled(effective_task_id, page_origin,
+                                ["password", *[f["label"] for f in fills if f.get("token") == "extra"]])
+        out["next"] = ("Submit, then call browser_vault action=check to see if the site took it. If the site then asks "
+                       "for a verification code, call browser_vault action=enter_code with this handle"
                        + (" (a code will be generated automatically)." if meta.has_otp else "."))
         out["if_rejected"] = _password_rejected_hint(page_origin)
     elif not filled:
@@ -818,6 +936,9 @@ def browser_vault_fill_field(handle: str, field: str, ref: str = "", task_id: Op
             return json.dumps({"success": False, "error_type": "origin_changed", "error": (
                 f"Refused: the page left {page_origin} before the fill ran. Nothing was written.")})
         filled = int(parsed.get("filled", 0)) if isinstance(parsed, dict) else 0
+        if filled:
+            from agent.vault_outcome import TRACKER
+            TRACKER.note_filled(effective_task_id, page_origin, [labels.get(want.lower(), "password")])
         return json.dumps({"success": bool(filled), "field": labels.get(want.lower(), "password"),
                            "filled_fields": filled, "origin": page_origin, "backend": backend.name})
 
@@ -854,14 +975,19 @@ BROWSER_VAULT_SCHEMA = {
         "(handle, field, optional ref: type one named secret of a saved login, e.g. field=PIN, into one page "
         "field; fill already types extras whose label matches a field); enter_code (a one-time/2FA code after the password: generated from a saved "
         "authenticator key or asked of the user; no_code_field means approve on their device); unlock (backend: "
-        "ask the user to unlock 1Password/Bitwarden). Prefer the login prompt over asking in chat. If the client "
+        "ask the user to unlock 1Password/Bitwarden); check (after EVERY submit of a form the vault filled: did the "
+        "site take it? enter_code checks by itself). On credential_rejected, tell the client in plain words WHICH "
+        "thing did not work (use tell_client), then ask again for just that thing (save_login for a password, "
+        "email or extra field, enter_code for a code); the next card says it too. Never re-ask silently. On "
+        "retry_limit, account_locked, device_check or retries_left=0, stop and send the takeover link. "
+        "Prefer the login prompt over asking in chat. If the client "
         "already pasted a login, save it with save_login and use it; do not refuse. Never repeat a password, card "
         "number, CVC or code back in a message. Stop on save_declined; never retry payment_declined."
     ),
     "parameters": {
         "type": "object",
         "properties": {
-            "action": {"type": "string", "enum": ["list", "fill", "fill_field", "save_login", "enter_code", "unlock"]},
+            "action": {"type": "string", "enum": ["list", "fill", "fill_field", "save_login", "enter_code", "check", "unlock"]},
             "handle": {"type": "string", "description": "fill / fill_field / enter_code: a handle from list."},
             "extra_fields": {"type": "array", "items": {"type": "string"}, "description": (
                 "save_login only: labels of other SECRET fields the form asks for, as the page shows them "
@@ -872,7 +998,7 @@ BROWSER_VAULT_SCHEMA = {
             "ref": {"type": "string", "description": (
                 "fill_field only: CSS selector of the page field (e.g. #pin). Omit to match by label.")},
             "backend": {"type": "string", "enum": ["onepassword", "bitwarden"], "description": "unlock only."},
-            "label": {"type": "string", "description": "save_login only: short site name (default: the host)."},
+            "label": {"type": "string", "description": "save_login / check: short site name (default: the host)."},
             "identifier": {"type": "string", "description": (
                 "save_login fallback only: the email or username the client already pasted in chat.")},
             "password": {"type": "string", "description": (
@@ -916,10 +1042,11 @@ def _handle_vault(args: dict[str, Any], **kwargs) -> str:
         "fill_field": lambda: browser_vault_fill_field(
             handle=handle, field=str(args.get("field") or ""), ref=str(args.get("ref") or ""), task_id=tid),
         "enter_code": lambda: browser_vault_enter_code(handle=handle, task_id=tid),
+        "check": lambda: browser_vault_check(task_id=tid, label=label),
     }
     if action not in page_ops:
         return json.dumps({"success": False, "error": f"Unknown action {action!r}; use list, fill, fill_field, save_login, "
-                                                       "enter_code or unlock."})
+                                                       "enter_code, check or unlock."})
     # The tool executor already holds the task's browser; hold it here too, so a direct caller
     # (plugin, test, other executor) never loses the login page while the user is asked.
     from tools.browser_session_holds import hold_browser_for_task

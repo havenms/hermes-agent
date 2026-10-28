@@ -98,7 +98,7 @@ def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
         ))
 
     def save_login_prompt(origin: str, site_label: str,
-                          extra_fields: tuple = ()) -> Optional[dict]:
+                          extra_fields: tuple = (), notice: str = "") -> Optional[dict]:
         """Identifier + password (+ any extra secret fields) for the page currently open. Stored in
         the local vault bound to ``origin`` and filled into the page at once.
 
@@ -107,12 +107,16 @@ def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
         prompt the user never saw. The second card names the identifier it will save, so a wrong one
         is caught before the password is sent (the identifier is not a secret: browser_vault list
         shows it). ``site_label`` is the name the client knows (the model's label, the page title,
-        then the host). A decline at any card stores nothing."""
+        then the host). A decline at any card stores nothing.
+
+        ``notice`` is the plain line from the last rejection ("That password didn't work..."); the
+        first card starts with it."""
         site = site_label or origin
         extras = [str(x) for x in (extra_fields or ()) if str(x or "").strip()]
         total = 2 + len(extras)
+        lead = f"{notice}\n\n" if notice else ""
         identifier = _clean(ask(
-            f"🔑 To get into {site} for you, I need your login (1/{total}).\n\n"
+            f"{lead}🔑 To get into {site} for you, I need your login (1/{total}).\n\n"
             "Reply with the email or username you use there.",
             secret=False, last=False, kind="save_login", answer_pattern=IDENTIFIER_PATTERN,
         ))
@@ -140,11 +144,13 @@ def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
                 answer["extra"][label] = value
         return answer
 
-    def code_prompt(site: str, hint: str) -> str:
-        """One-time code the site just sent, for a login with no stored seed."""
+    def code_prompt(site: str, hint: str, notice: str = "") -> str:
+        """One-time code the site just sent, for a login with no stored seed. ``notice`` is the plain
+        line from the last rejection ("That code didn't work..."); the card starts with it."""
         detail = f"\n\n{hint}" if hint else ""
+        lead = f"{notice}\n\n" if notice else ""
         return _clean(ask(
-            f"🔢 {site} just sent a code to your phone or email.\n\nReply with it here.{detail}",
+            f"{lead}🔢 {site} just sent a code to your phone or email.\n\nReply with it here.{detail}",
             secret=True, last=True, kind="code", answer_pattern=CODE_PATTERN,
         ))
 
