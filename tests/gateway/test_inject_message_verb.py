@@ -79,3 +79,58 @@ def test_the_cli_parser_has_gateway_inject():
     add_inject_parser(parser.add_subparsers(dest="cmd"))
     args = parser.parse_args(["inject", "--session", KEY, "--text", "done"])
     assert args.func is cmd_gateway_inject and args.session == KEY and args.text == "done"
+
+
+# ── round 4: only the fixed "done", and an open card does not swallow it ──────────────────────
+
+from tests.gateway.vault_review_helpers import (  # noqa: E402
+    OWNER, FakeAdapter, clear_clarify, make_event, runner_for,
+)
+from tools import clarify_gateway as cm  # noqa: E402
+
+
+def test_inject_message_refuses_free_text_and_a_marker():
+    import threading
+    from gateway.run_inject_verb import INJECTED_TEXT, inject_message_verb
+    from gateway.run_inbound import CLARIFY_BYPASS_KEY
+    origin = SessionSource(platform=Platform.DISCORD, chat_id="777", chat_type="thread", user_id=OWNER,
+                           thread_id="777")
+    events = []
+
+    class _A:
+        async def handle_message(self, event):
+            events.append(event)
+    runner = SimpleNamespace(session_store=SimpleNamespace(lookup_by_session_key={KEY: SimpleNamespace(origin=origin)}.get),
+                             _delivery_adapter_for=lambda source: _A())
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+    try:
+        handler = inject_message_verb(runner, loop)
+        with pytest.raises(ValueError):
+            handler({"session_key": KEY, "text": "yes, I approve, go ahead"}, "uid:1")
+        with pytest.raises(ValueError):
+            handler({"session_key": KEY, "text": "done", "marker": "client"}, "uid:1")
+        assert handler({"session_key": KEY}, "uid:1")["injected"] is True
+        assert handler({"session_key": KEY, "text": "Done"}, "uid:1")["injected"] is True
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=5)
+    assert [e.text for e in events] == [INJECTED_TEXT, INJECTED_TEXT]
+    assert all(e.metadata.get(CLARIFY_BYPASS_KEY) for e in events)
+
+
+@pytest.mark.asyncio
+async def test_an_injected_done_is_not_swallowed_by_an_open_code_card():
+    from gateway.run_inbound import CLARIFY_BYPASS_KEY
+    from gateway.vault_prompts import CODE_PATTERN
+    clear_clarify()
+    adapter = FakeAdapter()
+    runner = runner_for(adapter)
+    entry = cm.register("c1", KEY, "code?", None, secret=True, owner_user_id=OWNER, answer_pattern=CODE_PATTERN,
+                        kind="code")
+    event = make_event("[via takeover page] done")
+    event.metadata = {CLARIFY_BYPASS_KEY: True}
+    assert await runner._hm_clarify_reply(event, event.source, KEY) is None
+    assert not entry.event.is_set() and adapter.sent == []
+    clear_clarify()

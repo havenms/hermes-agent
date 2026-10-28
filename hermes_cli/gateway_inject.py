@@ -1,11 +1,12 @@
-"""``hermes gateway inject``: send a text into a conversation of the running gateway (TAPAS patch).
+"""``hermes gateway inject``: tell a conversation of the running gateway that the client pressed Done (TAPAS patch).
 
 Example (the takeover page's Done button)::
 
     hermes -p srijit gateway inject --session "$HERMES_SESSION_KEY" --text "done"
 
-The gateway receives ``[via takeover page] done`` as if the client wrote it. Talks to the profile's
-control socket, so only the same OS user can use it. Exit 0 on success, 1 otherwise.
+The gateway receives the fixed text ``[via takeover page] done``. It accepts no other text and no
+marker. Talks to the profile's control socket, so only the same OS user can use it. Exit 0 on
+success, 1 otherwise.
 """
 
 from __future__ import annotations
@@ -40,8 +41,8 @@ def cmd_gateway_inject(args) -> int:
 
 def add_inject_parser(gateway_subparsers) -> None:
     parser = gateway_subparsers.add_parser(
-        "inject", help="Send a text into a conversation as if its client wrote it (local, same user)")
+        "inject", help='Tell a conversation that the client pressed Done (fixed text "done"; local, same user)')
     parser.add_argument("--session", required=True, help="Session key of the conversation (HERMES_SESSION_KEY)")
-    parser.add_argument("--text", required=True, help="Text to send, for example: done")
-    parser.add_argument("--marker", default="", help='Prefix label (default: "via takeover page")')
+    parser.add_argument("--text", default="done", help='Only "done" is accepted (the default)')
+    parser.add_argument("--marker", default="", help="Deprecated: the marker is fixed")
     parser.set_defaults(func=cmd_gateway_inject)
