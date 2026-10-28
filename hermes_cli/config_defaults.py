@@ -460,6 +460,12 @@ DEFAULT_CONFIG = {
         # website/docs/developer-guide/browser-supervisor.md.
         "dialog_policy": "must_respond",  # must_respond | auto_dismiss | auto_accept
         "dialog_timeout_s": 300,  # safety auto-dismiss after N seconds under must_respond
+        # How long a browser_vault prompt on a messaging surface waits for the user (seconds; 0 or
+        # less = no limit). Clients often read the card late, so save_login waits hours; sites
+        # expire one-time codes, so code waits 30 min. See gateway/vault_prompts.py.
+        "vault_save_login_timeout": 14400,
+        "vault_code_timeout": 1800,
+        "vault_unlock_timeout": 1800,
         # Read by the `camofox` catalog plugin (Camofox left core). An empty free-form mapping, so
         # `hermes config set browser.camofox.<key>` is accepted and user values are never stripped.
         "camofox": {},

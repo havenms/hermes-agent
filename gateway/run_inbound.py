@@ -368,6 +368,15 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
             return None
         if _pending_clarify is None:
             return None
+        _responder_id = getattr(source, "user_id", None)
+        if not _clarify_mod.may_answer(_pending_clarify, _responder_id):
+            # A vault prompt asks one user. In a shared session (a Discord thread) another member's
+            # message is not the answer: leave the prompt armed and route the message as usual.
+            logger.info(
+                "Gateway left a pending prompt for its owner; message from another user routed normally "
+                "(session=%s, id=%s)", _quick_key, _pending_clarify.clarify_id,
+            )
+            return None
         _clarify_has_audio = bool(self._pending_event_audio_paths(event))
         _raw_clarify_reply = await self._prepare_clarify_reply_text(event)
 
@@ -384,7 +393,8 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
         # they can retry; on timeout the agent unblocks with an empty response.
         if not _raw_clarify_reply or _raw_clarify_reply.startswith("/"):
             return None
-        _text_outcome = _clarify_mod.attempt_text_response_for_session(_quick_key, _raw_clarify_reply)
+        _text_outcome = _clarify_mod.attempt_text_response_for_session(
+            _quick_key, _raw_clarify_reply, responder_id=_responder_id)
         if _text_outcome == _clarify_mod.TEXT_RESOLVED:
             logger.info(
                 "Gateway intercepted clarify text response (session=%s, id=%s)",
@@ -418,6 +428,18 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
                     # Best-effort scrub of the user's own message now that its value is read.
                     await self._scrub_secret_reply(_clarify_adapter, source, event)
             return ""
+        if _text_outcome == _clarify_mod.TEXT_NOT_OWNER:
+            return None  # an older owner-bound entry took the slot between the check and the attempt
+        if _text_outcome == _clarify_mod.TEXT_NOT_AN_ANSWER:
+            # The reply does not look like the requested value (a chat message after a long wait,
+            # not a code or a username). Keep the prompt open and say so. On a secret prompt the
+            # message may still hold a secret typed in the wrong place, so scrub it as well.
+            _clarify_adapter = self._delivery_adapter_for(source)
+            if _clarify_adapter:
+                if _pending_clarify.secret:
+                    await self._scrub_secret_reply(_clarify_adapter, source, event)
+                await self._send_unanchored_notice(_clarify_adapter, source, t("gateway.clarify.not_an_answer"))
+            return _retain("a reply that does not match the requested value")
         if _text_outcome == _clarify_mod.TEXT_REJECTED_SELECTION:
             # Selection-shaped but invalid (out-of-range number, bad comma-list): keep the clarify
             # armed for retry — don't cancel, don't treat as an unrelated follow-up.

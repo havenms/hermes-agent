@@ -77,7 +77,8 @@ def _clarify_send_disposition(fut, *, session_key: str, clarify_mod) -> Optional
 
 
 def _clarify_send_then_wait(fut, *, clarify_id: str, session_key: str, clarify_mod,
-                            fallback: Optional[Callable[[], Any]] = None) -> tuple[str, bool]:
+                            fallback: Optional[Callable[[], Any]] = None,
+                            timeout: Optional[float] = None) -> tuple[str, bool]:
     """Resolve a clarify prompt: send disposition, plain-text fallback, then the bounded wait.
 
     ``fallback()`` schedules the plain-text ``send_clarify`` and returns its future (or ``None``);
@@ -87,7 +88,9 @@ def _clarify_send_then_wait(fut, *, clarify_id: str, session_key: str, clarify_m
     delivery notice, not the inactivity one.
 
     Returns ``(response, answered)``. ``answered`` is the only signal that a user reply arrived;
-    callers must not infer it from the text (a real answer may start with '[' like a sentinel)."""
+    callers must not infer it from the text (a real answer may start with '[' like a sentinel).
+    ``timeout`` (seconds, ``<= 0`` = no limit) overrides the clarify timeout: vault prompts wait
+    on their own per-kind budget."""
     from gateway.run import _approval_send_outcome
 
     outcome = _approval_send_outcome(fut, timeout=SEND_ACK_WINDOW)
@@ -105,7 +108,8 @@ def _clarify_send_then_wait(fut, *, clarify_id: str, session_key: str, clarify_m
         return abort, False
     late = _LateFailureWatch(fut, clarify_id=clarify_id, session_key=session_key,
                              clarify_mod=clarify_mod, fallback=fallback)
-    timeout = clarify_mod.get_clarify_timeout()
+    if timeout is None:
+        timeout = clarify_mod.get_clarify_timeout()
     response = clarify_mod.wait_for_response(clarify_id, timeout=float(timeout))
     late.disarm()
     if late.undeliverable:
@@ -113,7 +117,8 @@ def _clarify_send_then_wait(fut, *, clarify_id: str, session_key: str, clarify_m
     if response == clarify_mod.CANCELLED:
         return response, False
     if response is None or response == "":
-        return f"[user did not respond within {int(timeout / 60)}m]", False
+        return (f"[user did not respond within {int(timeout / 60)}m]" if timeout > 0
+                else "[user did not respond]"), False
     return response, True
 
 

@@ -8,6 +8,7 @@ mode) or a numbered-list text fallback."""
 from __future__ import annotations
 import json
 import logging
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -29,6 +30,15 @@ class _ClarifyEntry:
     # the user's own message once it has been consumed, so the secret does not
     # sit in the chat scrollback after the agent has it.
     secret: bool = False
+    # The platform user id of the person the prompt asks. Set for vault prompts: in a shared
+    # session (a Discord thread, or a group with ``group_sessions_per_user: false``) any member's
+    # next message would otherwise answer it, so another member could supply the credential.
+    # None keeps the shared behaviour for ordinary clarify questions.
+    owner_user_id: Optional[str] = None
+    # Regex a typed reply to an open-ended prompt must fully match to count as the answer
+    # (``skip`` always counts). A vault prompt can wait for hours; without this the first
+    # unrelated message after the wait would be taken as the username or the one-time code.
+    answer_pattern: Optional[str] = None
     event: threading.Event = field(default_factory=threading.Event)
     response: Optional[str] = None
     awaiting_text: bool = False  # set when user picked "Other" or clarify is open-ended
@@ -46,18 +56,25 @@ TEXT_RESOLVED = "resolved"
 TEXT_REJECTED_PROSE = "rejected_prose"
 TEXT_REJECTED_SELECTION = "rejected_selection"
 TEXT_NO_PENDING = "no_pending"
+TEXT_NOT_OWNER = "not_owner"
+TEXT_NOT_AN_ANSWER = "not_an_answer"
 SKIP_WORD = "skip"
 SKIPPED = "\x00skipped"
 CANCELLED = "\x00cancelled"
 
 
 def register(clarify_id: str, session_key: str, question: str, choices: Optional[list[str]],
-             multi_select: bool = False, secret: bool = False) -> _ClarifyEntry:
+             multi_select: bool = False, secret: bool = False,
+             owner_user_id: Optional[str] = None, answer_pattern: Optional[str] = None) -> _ClarifyEntry:
     """Register a pending clarify request; caller then blocks on ``wait_for_response``.
     Open-ended (no choices) entries start in text mode: the next message IS the response.
-    ``secret`` marks an answer the adapter should delete from the chat once read."""
+    ``secret`` marks an answer the adapter should delete from the chat once read.
+    ``owner_user_id`` lets only that user answer (see :func:`may_answer`); ``answer_pattern`` is
+    the shape a typed answer to an open-ended prompt must have."""
     entry = _ClarifyEntry(clarify_id, session_key, question, list(choices) if choices else None,
                           bool(multi_select) and bool(choices), secret=bool(secret),
+                          owner_user_id=str(owner_user_id) if owner_user_id else None,
+                          answer_pattern=answer_pattern or None,
                           awaiting_text=not bool(choices))
     with _lock:
         _entries[clarify_id] = entry
@@ -140,6 +157,14 @@ def get_pending_for_session(session_key: str, *, include_choice_prompts: bool = 
         return None
 
 
+def may_answer(entry: Optional[_ClarifyEntry], responder_id: Optional[str]) -> bool:
+    """True when ``responder_id`` may answer ``entry``: anyone in the session for an ordinary
+    prompt, only the asked user for a prompt with an ``owner_user_id``."""
+    if entry is None or not entry.owner_user_id:
+        return True
+    return bool(responder_id) and str(responder_id) == entry.owner_user_id
+
+
 def _match_label(text: str, choices: list[str]) -> Optional[str]:
     """Stripped choice text matching ``text`` case-insensitively, ignoring the '(Recommended)'
     suffix the first choice carries by the time it reaches adapters; None if no match."""
@@ -199,7 +224,11 @@ def _coerce_text_response_detailed(entry: _ClarifyEntry, response: str) -> tuple
     text = str(response).strip()
     is_skip = text.casefold() == SKIP_WORD
     if not entry.choices:
-        return (SKIPPED if is_skip else text), None
+        if is_skip:
+            return SKIPPED, None
+        if entry.answer_pattern and not re.fullmatch(entry.answer_pattern, text):
+            return None, "not_an_answer"
+        return text, None
     if entry.multi_select:
         coerced = _coerce_multi_select_text(entry, text)
         selection_shaped = _selection_attempt_tokens(text, entry.choices) is not None

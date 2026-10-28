@@ -863,7 +863,10 @@ def _resolve_sequential_tool_timeout() -> float | None:
 # one run).
 # ``manage_connections`` waits on the connection operation's own deadline; the generic deadline
 # would return tool_timeout while its approval card is still open.
-_SEQUENTIAL_DEADLINE_EXEMPT_TOOLS = frozenset({"delegate_task", "manage_connections"})
+# ``browser_vault`` waits for the user's login or one-time code on its own per-kind budget
+# (``browser.vault_<kind>_timeout``, gateway/vault_prompts.py); the generic 420 s deadline cut every
+# wait short and left the prompt card live with nothing behind it.
+_SEQUENTIAL_DEADLINE_EXEMPT_TOOLS = frozenset({"delegate_task", "manage_connections", "browser_vault"})
 
 
 def _abandoned_sequential_result(agent, ref: _ToolCallRef, message: str, result_cls, **outcome) -> _ManagedToolResult:

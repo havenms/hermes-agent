@@ -33,11 +33,15 @@ class _Recorder:
         self.questions = []
         self.secret_flags = []
         self.last_flags = []
+        self.kinds = []
+        self.patterns = []
 
-    def __call__(self, question, secret=False, last=True):
+    def __call__(self, question, secret=False, last=True, kind="code", answer_pattern=None):
         self.questions.append(question)
         self.secret_flags.append(secret)
         self.last_flags.append(last)
+        self.kinds.append(kind)
+        self.patterns.append(answer_pattern)
         return self.answers.pop(0) if self.answers else ""
 
 
@@ -143,7 +147,8 @@ def test_vault_ask_holds_the_rearm_for_non_final_questions():
     from gateway.run_turn_runner import TurnRunner
     calls = []
     runner = object.__new__(TurnRunner)
-    runner._ask_clarify_question = lambda q, c, m, rearm=True, secret=False: (
+    runner._ctx = None
+    runner._ask_clarify_question = lambda q, c, m, rearm=True, secret=False, **_: (
         calls.append({"rearm": rearm, "secret": secret}) or ("answer", True))
     assert runner._vault_ask_sync("q1", secret=False, last=False) == "answer"
     assert runner._vault_ask_sync("q2", secret=True, last=True) == "answer"
@@ -154,5 +159,6 @@ def test_vault_ask_returns_blank_when_unanswered():
     """A blank return is what every vault callback reads as a decline."""
     from gateway.run_turn_runner import TurnRunner
     runner = object.__new__(TurnRunner)
-    runner._ask_clarify_question = lambda q, c, m, rearm=True, secret=False: ("notice", False)
+    runner._ctx = None
+    runner._ask_clarify_question = lambda q, c, m, rearm=True, secret=False, **_: ("notice", False)
     assert runner._vault_ask_sync("q") == ""

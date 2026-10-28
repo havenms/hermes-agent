@@ -616,7 +616,8 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
             answers[entry["qid"]] = None if raw == SKIPPED else raw
         return reply
 
-    def _vault_ask_sync(self, question: str, secret: bool = False, last: bool = True) -> str:
+    def _vault_ask_sync(self, question: str, secret: bool = False, last: bool = True,
+                        kind: str = "code", answer_pattern: Optional[str] = None) -> str:
         """Blocking secret prompt for the vault tools (see gateway/vault_prompts.py).
 
         Rides the same clarify primitive as ``_clarify_callback_sync``, and that is the
@@ -632,21 +633,39 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
         from a user who never answered — the caller just sits in ``wait_for_response``
         until the clarify timeout, which reads to the user as a hung agent.
 
+        Only the user whose message started the turn may answer (``owner_user_id``): in a
+        shared Discord thread another member's message must not become the credential.
+        The wait is ``browser.vault_<kind>_timeout``, not the clarify timeout (see
+        gateway/vault_prompts.py for the defaults and why).
+
         Returns "" when no answer arrived, which every vault callback reads as a decline.
+        A typed ``skip`` is a decline too: it must never reach the vault as a value.
         """
-        logger.info("Vault prompt dispatched (secret=%s, last=%s)", secret, last)
+        from gateway.vault_prompts import vault_prompt_timeout
+        from tools.clarify_gateway import CANCELLED, SKIPPED
+        owner = getattr(getattr(self._ctx, "source", None), "user_id", None)
+        timeout = vault_prompt_timeout(kind)
+        logger.info("Vault prompt dispatched (kind=%s, secret=%s, last=%s, owner_bound=%s, timeout=%ss)",
+                    kind, secret, last, bool(owner), int(timeout))
         response, answered = self._ask_clarify_question(
-            question, None, False, rearm=last, secret=secret)
-        logger.info("Vault prompt %s (secret=%s)", "answered" if answered else "unanswered", secret)
-        return response if answered else ""
+            question, None, False, rearm=last, secret=secret, owner_user_id=owner,
+            answer_pattern=answer_pattern, timeout=timeout)
+        logger.info("Vault prompt %s (kind=%s, secret=%s)", "answered" if answered else "unanswered", kind, secret)
+        if not answered or response in (SKIPPED, CANCELLED):
+            return ""
+        return response
 
     def _ask_clarify_question(self, question, choices, multi_select, rearm: bool = True,
-                              secret: bool = False) -> tuple[str, bool]:
+                              secret: bool = False, owner_user_id: Optional[str] = None,
+                              answer_pattern: Optional[str] = None,
+                              timeout: Optional[float] = None) -> tuple[str, bool]:
         """One card: register, send, wait, then retire it (no answer) or re-arm (answer).
         Returns ``(response, answered)``; the caller decides what "no answer" means.
 
         ``secret`` marks an answer the adapter deletes from the chat once it has been consumed,
-        so a password typed to the agent does not stay in the scrollback."""
+        so a password typed to the agent does not stay in the scrollback. ``owner_user_id`` and
+        ``answer_pattern`` restrict who and what answers (``tools.clarify_gateway``). ``timeout``
+        replaces the clarify timeout for this wait (None = the clarify timeout)."""
         from gateway.run_turn_runner_clarify_delivery import (
             UNDELIVERED_NO_SURFACE, _clarify_send_then_wait, text_fallback_coro)
         from tools import clarify_gateway as clarify_mod
@@ -671,6 +690,7 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
         entry = clarify_mod.register(
             clarify_id=clarify_id, session_key=session_key, question=question, choices=choices,
             multi_select=bool(multi_select), secret=bool(secret),
+            owner_user_id=owner_user_id, answer_pattern=answer_pattern,
         )
         # Unlike approval, clarify passes reopen=True so the continuation re-opens a native stream
         # below the question; if the re-seed fails the consumer degrades to send() automatically.
@@ -698,7 +718,7 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
         # failure — immediate or late — retries once as plain text before giving up.
         response, answered = _clarify_send_then_wait(
             fut, clarify_id=clarify_id, session_key=session_key, clarify_mod=clarify_mod,
-            fallback=_text_fallback)
+            fallback=_text_fallback, timeout=timeout)
         if self._approval_owner is not None:
             authority, session_id, generation = self._approval_owner
             authority.sessions[session_id].controls.snapshot(session_id, generation)

@@ -21,6 +21,7 @@ the secret has been read, on platforms that support deletion.
 
 from __future__ import annotations
 
+import logging
 from typing import Callable, Optional
 
 from agent.vault_backends.unlock import (
@@ -29,10 +30,42 @@ from agent.vault_backends.unlock import (
     set_unlock_prompt_callback,
 )
 
-# A surface's blocking ask: (question, secret, last) -> the user's reply, "" when unanswered.
-# ``last`` tells the surface whether another question follows in this sequence, so it can
-# hold the stream/typing re-arm for the final one (same contract as the clarify batch).
+logger = logging.getLogger(__name__)
+
+# A surface's blocking ask: (question, secret, last, kind, answer_pattern) -> the user's reply,
+# "" when unanswered. ``last`` tells the surface whether another question follows in this
+# sequence, so it can hold the stream/typing re-arm for the final one (same contract as the
+# clarify batch). ``kind`` picks the wait (:func:`vault_prompt_timeout`). ``answer_pattern`` is a
+# regex a typed reply must fully match to count as the answer (see ``tools.clarify_gateway``).
 VaultAsk = Callable[..., str]
+
+# How long each prompt waits for the user, in seconds (``browser.vault_<kind>_timeout``; 0 or
+# less = no limit). The wait blocks one tool call, not the gateway: the call keeps the turn's
+# activity clock fresh, so no watchdog ends it, and the browser idle reaper skips a browser
+# whose task has a call in flight. The limits are about the user, not the machinery:
+#   save_login: a client often reads the card hours later. The value is stored even when the
+#     login page went stale meanwhile, so a long wait still saves the login.
+#   code: sites expire one-time codes in minutes; after 30 minutes the bot asks for a new code.
+#   unlock: a password-manager unlock is asked when the bot is about to use it.
+VAULT_PROMPT_TIMEOUT_DEFAULTS = {"save_login": 4 * 3600, "code": 30 * 60, "unlock": 30 * 60}
+
+# A typed reply must look like the answer, or the prompt stays open and the user gets a hint.
+# Without this, the first unrelated message after a long wait ("are you there?") would be
+# stored as the username or typed into the page as the code.
+IDENTIFIER_PATTERN = r"\S{1,254}"  # email, phone or username: one token, no spaces
+CODE_PATTERN = r"(?=.{4,})(?=[^0-9]*[0-9])[A-Za-z0-9]{1,8}(?:[ -]?[A-Za-z0-9]{1,8}){0,2}"  # 123456, 123 456, G-123456
+
+
+def vault_prompt_timeout(kind: str) -> float:
+    """Seconds a vault prompt of ``kind`` waits (``browser.vault_<kind>_timeout``); 0 = no limit."""
+    default = VAULT_PROMPT_TIMEOUT_DEFAULTS.get(kind, VAULT_PROMPT_TIMEOUT_DEFAULTS["code"])
+    try:
+        from tools.browser_session_cloud import browser_cfg
+        value = float(browser_cfg(f"vault_{kind}_timeout", default, float))
+    except Exception:  # health: allow BLE001 -- a config read failure keeps the default wait
+        logger.debug("vault prompt timeout read failed; using %ss", default, exc_info=True)
+        return float(default)
+    return max(0.0, value) if value == value else float(default)  # NaN -> default
 
 
 def _clean(value: Optional[str]) -> str:
@@ -56,7 +89,7 @@ def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
         return _clean(ask(
             f"🔐 Unlock {name}.\n\nSend your master password in your next message. "
             f"It is passed to `{backend}` once to open the vault and is not stored.",
-            secret=True, last=True,
+            secret=True, last=True, kind="unlock",
         ))
 
     def save_login_prompt(origin: str, site_label: str) -> Optional[dict[str, str]]:
@@ -65,20 +98,22 @@ def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
 
         Two questions, so the text says so: a bare "Now the password" read as the
         first prompt repeating, and an unanswered first card left the caller
-        looking like it had hung on a prompt the user never saw."""
+        looking like it had hung on a prompt the user never saw. The second card
+        names the identifier it will save, so a wrong one is caught before the
+        password is sent (the identifier is not a secret: browser_vault list shows it)."""
         host = site_label or origin
         identifier = _clean(ask(
             f"🔑 Login for {host} (1/2)\n\n"
-            "What email or username should I save for this site?",
-            secret=False, last=False,
+            "What email or username should I save for this site? Send only that.",
+            secret=False, last=False, kind="save_login", answer_pattern=IDENTIFIER_PATTERN,
         ))
         if not identifier:
             return None
         password = ask(
             f"🔑 Login for {host} (2/2)\n\n"
-            "Now the password. It is stored in your local vault and typed straight "
-            "into the page.",
-            secret=True, last=True,
+            f"Now the password for `{identifier}`. It is stored in your local vault and typed "
+            "straight into the page. If the username is wrong, reply skip.",
+            secret=True, last=True, kind="save_login",
         )
         if not password:
             return None
@@ -88,9 +123,9 @@ def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
         """One-time code the site just sent, for a login with no stored seed."""
         detail = f"\n\n{hint}" if hint else ""
         return _clean(ask(
-            f"🔢 {site} sent you a one-time code.\n\nSend it here and I'll enter it "
+            f"🔢 {site} sent you a one-time code.\n\nSend only the code here and I'll enter it "
             f"into the page.{detail}",
-            secret=True, last=True,
+            secret=True, last=True, kind="code", answer_pattern=CODE_PATTERN,
         ))
 
     return {
