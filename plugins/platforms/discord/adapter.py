@@ -5893,7 +5893,10 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
         )
         self._secret_prompt_views[clarify_id] = view
         view.on_closed = lambda: self._secret_prompt_views.pop(clarify_id, None)
-        key = "secret_hint_password" if entry.kind in ("save_login", "unlock") else "secret_hint"
+        # The password hint only on a card that asks for a password; an extra login field (PIN,
+        # security answer) gets the plain private-box hint.
+        asks_password = "password" in str(entry.question or "").casefold()
+        key = "secret_hint_password" if entry.kind in ("save_login", "unlock") and asks_password else "secret_hint"
         return t(f"platform.discord.prompt.{key}"), view
 
     async def retire_clarify_card(self, clarify_id: str, notice: str) -> None:

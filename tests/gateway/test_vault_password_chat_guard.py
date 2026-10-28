@@ -212,3 +212,25 @@ def test_save_login_tells_the_bot_plainly_when_the_password_fails(monkeypatch):
                         lambda handle, task_id=None: json.dumps({"success": False, "error": "no field"}))
     out = json.loads(vault.browser_vault_save_login(identifier="owner", password="pw", task_id="t"))
     assert out["password_typed"] is False and "could not be typed" in out["next"]
+
+
+@pytest.mark.asyncio
+async def test_an_extra_login_field_card_does_not_call_it_a_password():
+    """A PIN or security-answer card gets the plain private-box hint, not "type your password"."""
+    from unittest.mock import AsyncMock
+    from plugins.platforms.discord.adapter import DiscordAdapter
+    adapter = DiscordAdapter(PlatformConfig(enabled=True, token="test-token", extra={}))
+    adapter._client = MagicMock()
+    adapter._allowed_user_ids = {OWNER}
+    adapter._allowed_role_ids = set()
+    cm.register("x9", KEY, "🔑 TestCo Books also asks for your PIN (3/3).", None, secret=True,
+                owner_user_id=OWNER, chat_guard=True, kind="save_login")
+    channel = MagicMock()
+    sent = MagicMock()
+    sent.id = 1
+    channel.send = AsyncMock(return_value=sent)
+    adapter._client.get_channel = MagicMock(return_value=channel)
+    await adapter.send_clarify(chat_id="777", question="🔑 TestCo Books also asks for your PIN (3/3).",
+                               choices=None, clarify_id="x9", session_key=KEY)
+    content = channel.send.call_args.kwargs["content"]
+    assert "Enter privately" in content and "your password" not in content
