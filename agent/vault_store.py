@@ -555,8 +555,13 @@ class VaultStore:
         label: str,
         secret: dict[str, Any],
         origin: Optional[str] = None,
+        replace_same_login: bool = False,
     ) -> VaultItemMeta:
         """Add an item. ``secret`` is the sensitive payload (encrypted at rest).
+
+        ``replace_same_login``: for a login, update the item that already has the same origin and
+        identifier (case-insensitive) in place, with its id, instead of adding a second one. A client
+        who corrects a password must not leave the old, wrong login behind.
 
         For ``kind='login'``, ``origin`` is required and the payload must
         contain ``identifier_type``, ``identifier`` and ``password``. The
@@ -617,7 +622,18 @@ class VaultStore:
             record["extra_labels"] = list(secret["extra"])
         with self._locked():
             items = self._read_all()
-            items.append(record)
+            same = None
+            if kind == "login" and replace_same_login:
+                same = next((i for i, rec in enumerate(items)
+                             if rec.get("kind") == "login" and rec.get("origin") == norm_origin
+                             and str(rec.get("identifier") or "").casefold() == identifier.casefold()), None)
+            if same is not None:
+                record["id"] = items[same].get("id") or item_id
+                record["created_at"] = items[same].get("created_at") or record["created_at"]
+                record["updated_at"] = datetime.now(UTC).isoformat()
+                items[same] = record
+            else:
+                items.append(record)
             self._write_all(items)
         return self._meta(record)
 

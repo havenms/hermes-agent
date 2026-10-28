@@ -372,11 +372,16 @@ def browser_vault_save_login(label: str = "", task_id: Optional[str] = None,
             from agent.redact import register_vault_redaction_value
             for value in payload["extra"].values():
                 register_vault_redaction_value(value)
-        meta = get_vault_store().add_item("login", site, payload, origin=origin)
+        # A retry for the same email or username updates that login; it does not add a second one.
+        store = get_vault_store()
+        replace = {"replace_same_login": True} if _accepts_kw(store.add_item, "replace_same_login") else {}
+        meta = store.add_item("login", site, payload, origin=origin, **replace)
     except Exception as exc:
         return json.dumps({"success": False, "error_type": "save_failed", "error": str(exc)[:200]})
     finally:
         answer.clear()
+    from agent.vault_outcome import TRACKER as _tracker
+    _tracker.note_saved(effective_task_id, origin, meta.id)
     filled = json.loads(browser_vault_fill(meta.id, task_id=effective_task_id))
     out = {"success": True, "handle": meta.id, "origin": origin, "identifier": identifier,
            "identifier_type": id_type, "fill": filled,
@@ -483,11 +488,30 @@ def browser_vault_check(task_id: Optional[str] = None, label: str = "") -> str:
     if verdict is None:
         return json.dumps({"success": False, "error_type": "page_unreadable",
                            "error": "Could not read the page. Look at it with the browser tools."})
+    if verdict["outcome"] == "unknown":
+        # The same form is still there with no error: the page may still be loading (a slow SSO
+        # hop). That is not a rejection, and it does not use up a retry.
+        return json.dumps({"success": True, "outcome": "pending", "origin": origin,
+                           "next": ("The page has not moved on yet. Wait a few seconds, then call browser_vault "
+                                    "action=check again. Do not ask the client again yet.")})
     record = TRACKER.record(effective_task_id, origin, verdict)
     if verdict["outcome"] == "accepted":
+        TRACKER.take_saved(effective_task_id, origin)
         return json.dumps({"success": True, "outcome": "accepted", "origin": origin,
                            "next": "The site took it. Carry on, and prove it works on a page that shows data."})
-    return json.dumps(rejected_result(verdict, record, label.strip() or _site_of(origin)), ensure_ascii=False)
+    out = rejected_result(verdict, record, label.strip() or _site_of(origin))
+    if verdict.get("reason") == "wrong" and verdict.get("field") not in ("code", "check"):
+        # The login save_login stored in this task did not work: remove it, so a later session
+        # does not pick the wrong one. The retry saves the corrected login.
+        handle = TRACKER.take_saved(effective_task_id, origin)
+        if handle:
+            try:
+                from agent.vault_store import get_vault_store
+                out["rejected_login_removed"] = bool(get_vault_store().remove_item(handle))
+            except Exception:  # health: allow BLE001 -- a failed cleanup must not hide the rejection
+                logger.debug("Could not remove the rejected login", exc_info=True)
+                out["rejected_login_removed"] = False
+    return json.dumps(out, ensure_ascii=False)
 
 
 def _extra_labels(extra_fields: Any, pasted_extra: dict) -> list[str] | str:

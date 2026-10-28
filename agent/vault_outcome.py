@@ -143,7 +143,6 @@ def _field_from_text(text: str, filled: list[str]) -> Optional[str]:
             return name
     return None
 
-
 def _trim(text: str, limit: int = 160) -> str:
     text = " ".join(str(text or "").split())
     return text if len(text) <= limit else text[: limit - 1] + "…"
@@ -238,6 +237,7 @@ class OutcomeTracker:
         self._lock = threading.RLock()
         self._filled: dict[str, tuple[str, list[str], float]] = {}  # task -> (origin, fields, at)
         self._rejects: dict[tuple[str, str], dict[str, dict]] = {}
+        self._saved: dict[str, tuple[str, str, float]] = {}  # task -> (origin, vault handle, at)
 
     def _key(self, task_id: Optional[str], origin: str) -> tuple[str, str]:
         return (str(task_id or "default"), str(origin or ""))
@@ -248,6 +248,20 @@ class OutcomeTracker:
         with self._lock:
             self._filled[str(task_id or "default")] = (str(origin or ""), [str(f) for f in fields if f],
                                                        time.monotonic())
+
+    def note_saved(self, task_id: Optional[str], origin: str, handle: str) -> None:
+        """Remember the login that save_login stored in this task, so a rejected one can be removed."""
+        with self._lock:
+            self._saved[str(task_id or "default")] = (str(origin or ""), str(handle or ""), time.monotonic())
+
+    def take_saved(self, task_id: Optional[str], origin: str) -> str:
+        """The handle save_login stored in this task for ``origin`` (forgotten once taken), or ""."""
+        with self._lock:
+            got = self._saved.get(str(task_id or "default"))
+            if not got or got[0] != str(origin or "") or time.monotonic() - got[2] >= REJECTION_TTL_S:
+                return ""
+            self._saved.pop(str(task_id or "default"), None)
+            return got[1]
 
     def last_filled(self, task_id: Optional[str]) -> tuple[str, list[str]]:
         """``(origin, fields)`` of the last fill in this task, or ``("", [])``."""
@@ -303,8 +317,10 @@ class OutcomeTracker:
             if task_id is None:
                 self._filled.clear()
                 self._rejects.clear()
+                self._saved.clear()
                 return
             self._filled.pop(str(task_id or "default"), None)
+            self._saved.pop(str(task_id or "default"), None)
             self._rejects.pop(self._key(task_id, origin), None)
 
 
