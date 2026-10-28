@@ -216,12 +216,20 @@ def clean_clarify():
     clear()
 
 
-@pytest.mark.parametrize("word", ["skip", "wrong", "Wrong email", "cancel", "that's wrong."])
+@pytest.mark.parametrize("word", ["skip", "cancel", "stop", "Stop."])
 def test_plain_decline_words_still_work_on_a_login_card(clean_clarify, word):
     entry = cm.register("p1", KEY, "password?", None, secret=True, owner_user_id="1", chat_guard=True,
                         kind="save_login")
     assert cm.attempt_text_response_for_session(KEY, word, "1") == cm.TEXT_RESOLVED
     assert entry.response == cm.SKIPPED
+
+
+@pytest.mark.parametrize("word", ["wrong", "Wrong email", "that's wrong."])
+def test_wrong_email_words_go_back_and_do_not_decline(clean_clarify, word):
+    entry = cm.register("p1", KEY, "password?", None, secret=True, owner_user_id="1", chat_guard=True,
+                        kind="save_login")
+    assert cm.attempt_text_response_for_session(KEY, word, "1") == cm.TEXT_RESOLVED
+    assert entry.response == cm.WRONG_ANSWER
 
 
 def test_an_ordinary_question_takes_cancel_as_an_answer(clean_clarify):

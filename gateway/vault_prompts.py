@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 from typing import Callable, Optional
 
-from tools.clarify_gateway import FORM_ANSWER_PREFIX
+from tools.clarify_gateway import FORM_ANSWER_PREFIX, WRONG_ANSWER
 from agent.vault_backends.unlock import (
     set_code_prompt_callback,
     set_pasted_secret_scrub_callback,
@@ -58,9 +58,12 @@ VAULT_PROMPT_TIMEOUT_DEFAULTS = {"save_login": 4 * 3600, "code": 30 * 60, "unloc
 # Without this, the first unrelated message after a long wait ("are you there?") would be
 # stored as the username or typed into the page as the code.
 IDENTIFIER_PATTERN = r"\S{1,254}"  # email, phone or username: one token, no spaces
-# The password card's way out. A typed "skip", "wrong", "cancel" or "stop" still declines
-# (``tools.clarify_gateway.DECLINE_WORDS``); the card does not teach a command word.
+# The password card's way back. A typed "wrong", "wrong email" or "not my email" goes back to the
+# email or username card (``tools.clarify_gateway.WRONG_WORDS``). "skip", "cancel" and "stop" still
+# decline the login (``DECLINE_WORDS``).
 WRONG_LOGIN_LINE = "Wrong email or username? Just tell me."
+# How many times one save_login may go back to the email or username card.
+MAX_IDENTIFIER_REDO = 3
 
 CODE_PATTERN = r"(?=.{4,})(?=[^0-9]*[0-9])[A-Za-z0-9]{1,8}(?:[ -]?[A-Za-z0-9]{1,8}){0,2}"  # 123456, 123 456, G-123456
 
@@ -78,6 +81,10 @@ def vault_prompt_timeout(kind: str) -> float:
 
 
 def _clean(value: Optional[str]) -> str:
+    """The typed value, or "" for no answer. A "wrong email" reply on a card that cannot go back
+    (code, unlock, the email card itself) is a decline, as before."""
+    if value == WRONG_ANSWER:
+        return ""
     return (value or "").strip()
 
 
@@ -121,23 +128,35 @@ def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
         total = 2 + len(extras)
         lead = f"{notice}\n\n" if notice else ""
         form = _login_form_fields(extras) if total <= MAX_FORM_FIELDS and _takes_form(ask) else None
-        first = ask(
-            f"{lead}🔑 To get into {site} for you, I need your login (1/{total}).\n\n"
-            "Reply with the email or username you use there.",
-            secret=False, last=False, kind="save_login", answer_pattern=IDENTIFIER_PATTERN,
-            **({"form_fields": form} if form else {}),
-        )
-        if form and str(first or "").startswith(FORM_ANSWER_PREFIX):
-            return _form_answer(str(first), extras)
-        identifier = _clean(first)
-        if not identifier:
-            return None
+        for _redo in range(MAX_IDENTIFIER_REDO + 1):
+            first = ask(
+                f"{lead}🔑 To get into {site} for you, I need your login (1/{total}).\n\n"
+                "Reply with the email or username you use there.",
+                secret=False, last=False, kind="save_login", answer_pattern=IDENTIFIER_PATTERN,
+                **({"form_fields": form} if form else {}),
+            )
+            if form and str(first or "").startswith(FORM_ANSWER_PREFIX):
+                return _form_answer(str(first), extras)
+            identifier = _clean(first)
+            if not identifier:
+                return None
+            answer: Optional[dict] = _ask_secrets(identifier, site, extras, total)
+            if answer is not _GO_BACK:
+                return answer
+            # "Wrong email": ask card 1 again, with a plain line on top.
+            lead = "No problem. Let's fix the email or username first.\n\n"
+        return None
+
+    def _ask_secrets(identifier: str, site: str, extras: list, total: int):
+        """Cards 2..N. ``_GO_BACK`` when the client says the email or username was wrong."""
         password = ask(
             f"🔑 Thanks! Now I need the password for {identifier} (2/{total}).\n\n"
             "You can also reply here with just the password. I'll type it in and remove your message. "
             f"{WRONG_LOGIN_LINE}",
             secret=True, last=not extras, kind="save_login", chat_guard=True,
         )
+        if password == WRONG_ANSWER:
+            return _GO_BACK
         if not password:
             return None
         answer: dict = {"identifier": identifier, "password": password}
@@ -149,6 +168,8 @@ def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
                     "Reply here with just that. I'll type it in and remove your message.",
                     secret=True, last=n == total, kind="save_login", chat_guard=True,
                 )
+                if value == WRONG_ANSWER:
+                    return _GO_BACK
                 if not value:
                     return None
                 answer["extra"][label] = value
@@ -169,6 +190,9 @@ def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
         "save_login": save_login_prompt,
         "code": code_prompt,
     }
+
+
+_GO_BACK = object()  # sentinel: the client said the email or username was wrong
 
 
 def _takes_form(ask: VaultAsk) -> bool:

@@ -226,14 +226,28 @@ def drop_holds_for_session(session_key: str) -> int:
 SKIP_WORD = "skip"
 # Typed words that decline a prompt bound to one user (vault prompts). The cards say "just tell
 # me" instead of teaching a command; these keep working without being shown.
-DECLINE_WORDS = frozenset({"skip", "wrong", "cancel", "stop", "wrong email", "wrong username", "that's wrong",
-                           "thats wrong", "it's wrong", "its wrong"})
+DECLINE_WORDS = frozenset({"skip", "cancel", "stop", "never mind", "nevermind", "forget it"})
+# Typed words that say the email or username was wrong. On a vault login card they go back to the
+# email or username card (``WRONG_ANSWER``); they do not decline the login.
+WRONG_WORDS = frozenset({"wrong", "wrong email", "wrong username", "wrong user", "wrong login", "wrong account",
+                         "that's wrong", "thats wrong", "it's wrong", "its wrong", "that is wrong",
+                         "wrong email address", "that's the wrong email", "that is the wrong email",
+                         "not my email", "not my username", "that's not my email", "change email",
+                         "change the email", "different email", "use a different email"})
+
+
 def _is_decline(entry: "_ClarifyEntry", text: str) -> bool:
     word = _norm_word(text)
     return word == SKIP_WORD or (entry.owner_user_id is not None and word in DECLINE_WORDS)
 
 
+def _is_wrong(entry: "_ClarifyEntry", text: str) -> bool:
+    return entry.owner_user_id is not None and _norm_word(text) in WRONG_WORDS
+
+
 SKIPPED = "\x00skipped"
+# The client said the email or username was wrong (``WRONG_WORDS``): the vault login goes back to it.
+WRONG_ANSWER = "\x00wrong"
 # Marks a response that came from one private form (see ``_ClarifyEntry.form_fields``).
 FORM_ANSWER_PREFIX = "\x00form:"
 CANCELLED = "\x00cancelled"
@@ -405,6 +419,8 @@ def _coerce_text_response_detailed(entry: _ClarifyEntry, response: str) -> tuple
     if not entry.choices:
         if is_skip:
             return SKIPPED, None
+        if _is_wrong(entry, text):
+            return WRONG_ANSWER, None
         if entry.answer_pattern and not re.fullmatch(entry.answer_pattern, text):
             return None, "not_an_answer"
         return text, None
@@ -497,7 +513,7 @@ def _attempt_text_response(entry: _ClarifyEntry, response: str, responder_id: Op
     if not may_answer(entry, responder_id):
         return TEXT_NOT_OWNER
     text = str(response).strip()
-    if entry.chat_guard and not private_form and not _is_decline(entry, text):
+    if entry.chat_guard and not private_form and not _is_decline(entry, text) and not _is_wrong(entry, text):
         # A password card takes a typed reply only when it is clearly a password. Anything else is
         # held by the gateway and the client confirms with a button. A typed "yes" never counts.
         if has_open_hold(entry.clarify_id) and _norm_word(text) in _YES_NO_WORDS:
