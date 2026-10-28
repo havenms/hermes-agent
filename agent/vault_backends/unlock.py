@@ -67,6 +67,21 @@ def get_save_login_prompt_callback() -> Optional[SaveLoginPrompt]:
     return getattr(_callback_tls, "save_login", None)
 
 
+# () -> True when the surface removed the user's chat message that started this turn. Used after
+# the agent saves a login the user pasted in a normal message (save_login with identifier and
+# password): the stored copy is enough, the chat copy should go.
+PastedSecretScrub = Callable[[], bool]
+
+
+def set_pasted_secret_scrub_callback(cb: Optional[PastedSecretScrub]) -> None:
+    """Register the surface's "remove the user's message that carried a pasted login", per thread."""
+    _callback_tls.pasted_scrub = cb
+
+
+def get_pasted_secret_scrub_callback() -> Optional[PastedSecretScrub]:
+    return getattr(_callback_tls, "pasted_scrub", None)
+
+
 def _key(backend: str) -> tuple[str, str]:
     # Tokens are profile-scoped: a Desktop gateway hosts several profiles in one process and
     # profile B must never reuse (or lock) profile A's manager session.

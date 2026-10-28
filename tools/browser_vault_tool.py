@@ -286,11 +286,25 @@ def browser_vault_unlock(backend_name: str) -> str:
     return json.dumps({"success": True, "backend": backend.name})
 
 
-def browser_vault_save_login(label: str = "", task_id: Optional[str] = None) -> str:
+def browser_vault_save_login(label: str = "", task_id: Optional[str] = None,
+                             identifier: str = "", password: str = "") -> str:
     """Ask the user (masked prompt on their surface) for the login of the CURRENT page, store it in the local
-    vault bound to that origin, and fill the password at once. The values never enter the conversation."""
+    vault bound to that origin, and fill the password at once. The values never enter the conversation.
+
+    Fallback: when the user already pasted the login in a normal chat message, the agent passes it as
+    ``identifier`` + ``password``. It is stored exactly as a prompted login (same origin binding), the
+    password is registered with the model-egress redaction boundary first, and the surface is asked to
+    delete the user's message."""
     from agent.vault_backends.unlock import can_prompt_here, get_save_login_prompt_callback
     from agent.vault_store import get_vault_store
+
+    pasted = bool(password)
+    if pasted:
+        from agent.redact import register_vault_redaction_value
+        register_vault_redaction_value(password)  # before any page or result can echo it
+        if not str(identifier or "").strip():
+            return json.dumps({"success": False, "error_type": "identifier_required",
+                               "error": "A pasted login needs both identifier (email or username) and password."})
 
     effective_task_id = task_id or "default"
     # The supervisor's default page session is whatever tab it attached to first (on Browser Use that is
@@ -300,13 +314,14 @@ def browser_vault_save_login(label: str = "", task_id: Optional[str] = None) -> 
     if not origin:
         return json.dumps({"success": False, "error": "Open the site's login page first; the login is saved for that page's origin."})
     prompt = get_save_login_prompt_callback()
-    if prompt is None or not can_prompt_here():
+    if not pasted and (prompt is None or not can_prompt_here()):
         return json.dumps({"success": False, "error_type": "prompt_unavailable",
                            "error": (f"This session cannot ask the user for a login (headless/cron/API). Tell them to run "
                                      f"`hermes vault add` or use Desktop → Settings → Passwords & Logins for {origin}.")})
     host = origin.split("://", 1)[-1]
     site = label.strip() or host
-    answer = prompt(origin, host)  # the prompt names the site by host: the user recognises URLs, not agent labels
+    # The prompt names the site by host: the user recognises URLs, not agent labels.
+    answer = {"identifier": str(identifier).strip(), "password": str(password)} if pasted else prompt(origin, host)
     if not answer or not answer.get("password") or not answer.get("identifier"):
         return json.dumps({"success": False, "error_type": "save_declined",
                            "error": "The user chose not to save a login for this site. Do not ask again this turn."})
@@ -320,10 +335,29 @@ def browser_vault_save_login(label: str = "", task_id: Optional[str] = None) -> 
     finally:
         answer.clear()
     filled = json.loads(browser_vault_fill(meta.id, task_id=effective_task_id))
-    return json.dumps({"success": True, "handle": meta.id, "origin": origin, "identifier": identifier,
-                       "identifier_type": id_type, "fill": filled,
-                       "next": "Type the identifier into the username field if the form has one, then submit."},
-                      ensure_ascii=False)
+    out = {"success": True, "handle": meta.id, "origin": origin, "identifier": identifier,
+           "identifier_type": id_type, "fill": filled,
+           "next": "Type the identifier into the username field if the form has one, then submit."}
+    if pasted:
+        out["source"] = "pasted"
+        out["chat_message_removed"] = _scrub_pasted_message()
+        out["next"] += (" Never repeat the password in a message." if out["chat_message_removed"] else
+                        " The client's message with the password is still in the chat: ask them to delete it. "
+                        "Never repeat the password in a message.")
+    return json.dumps(out, ensure_ascii=False)
+
+
+def _scrub_pasted_message() -> bool:
+    """Ask the surface to delete the user's message that carried the pasted login (best effort)."""
+    from agent.vault_backends.unlock import get_pasted_secret_scrub_callback
+    scrub = get_pasted_secret_scrub_callback()
+    if scrub is None:
+        return False
+    try:
+        return bool(scrub())
+    except Exception:  # health: allow BLE001 -- the login is saved; a failed delete only keeps the message
+        logger.debug("pasted-login message scrub failed", exc_info=True)
+        return False
 
 
 _TAB_PROBES["otp"] = ("!!document.querySelector('input[autocomplete=one-time-code], input[name*=otp i], input[name*=code i], "
@@ -610,6 +644,11 @@ BROWSER_VAULT_SCHEMA = {
             "handle": {"type": "string", "description": "fill / enter_code: a handle from list."},
             "backend": {"type": "string", "enum": ["onepassword", "bitwarden"], "description": "unlock only."},
             "label": {"type": "string", "description": "save_login only: short site name (default: the host)."},
+            "identifier": {"type": "string", "description": (
+                "save_login fallback only: the email or username the client already pasted in chat.")},
+            "password": {"type": "string", "description": (
+                "save_login fallback only: the password the client already pasted in chat. Omit both to "
+                "ask the client in a prompt (preferred).")},
         },
         "required": ["action"],
     },
@@ -641,7 +680,9 @@ def _handle_vault(args: dict[str, Any], **kwargs) -> str:
         return browser_vault_unlock(str(args.get("backend") or ""))
     page_ops = {
         "fill": lambda: browser_vault_fill(handle=handle, task_id=tid),
-        "save_login": lambda: browser_vault_save_login(label=label, task_id=tid),
+        "save_login": lambda: browser_vault_save_login(
+            label=label, task_id=tid, identifier=str(args.get("identifier") or ""),
+            password=str(args.get("password") or "")),
         "enter_code": lambda: browser_vault_enter_code(handle=handle, task_id=tid),
     }
     if action not in page_ops:

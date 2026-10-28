@@ -512,7 +512,7 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
         # Without this the callbacks stay unregistered on every chat platform, can_prompt_here()
         # is False, and each vault tool can only answer prompt_unavailable.
         from gateway.vault_prompts import install_vault_prompt_callbacks
-        install_vault_prompt_callbacks(self._vault_ask_sync)
+        install_vault_prompt_callbacks(self._vault_ask_sync, self._scrub_turn_message_sync)
         # Thinking between tool calls is independent of tool_progress mode (Mattermost opts in
         # per platform so global scratch-text doesn't leak into threads).
         agent.thinking_progress = ctx._thinking_enabled
@@ -654,6 +654,26 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
         if not answered or response in (SKIPPED, CANCELLED):
             return ""
         return response
+
+    def _scrub_turn_message_sync(self) -> bool:
+        """Delete the user's message that started this turn; True when the platform removed it.
+
+        The agent calls this through browser_vault save_login after it stored a login the user
+        pasted in that message. Best effort: a Discord DM or a bot without Manage Messages keeps it.
+        """
+        ctx = self._ctx
+        adapter = getattr(ctx, "_status_adapter", None)
+        source = getattr(ctx, "source", None)
+        message_id = getattr(ctx, "inbound_message_id", None) or getattr(source, "message_id", None)
+        if adapter is None or source is None or not message_id:
+            return False
+        fut = self._schedule(adapter.delete_message(source.chat_id, str(message_id)),
+                             "Pasted-login message delete failed to schedule")
+        try:
+            return bool(fut is not None and fut.result(timeout=15) is True)
+        except Exception:  # health: allow BLE001 -- a failed delete only means the message stays
+            logger.debug("Pasted-login message delete failed", exc_info=True)
+            return False
 
     def _ask_clarify_question(self, question, choices, multi_select, rearm: bool = True,
                               secret: bool = False, owner_user_id: Optional[str] = None,

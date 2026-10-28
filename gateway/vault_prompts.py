@@ -26,6 +26,7 @@ from typing import Callable, Optional
 
 from agent.vault_backends.unlock import (
     set_code_prompt_callback,
+    set_pasted_secret_scrub_callback,
     set_save_login_prompt_callback,
     set_unlock_prompt_callback,
 )
@@ -135,7 +136,7 @@ def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
     }
 
 
-def install_vault_prompt_callbacks(ask: VaultAsk) -> None:
+def install_vault_prompt_callbacks(ask: VaultAsk, scrub: Optional[Callable[[], bool]] = None) -> None:
     """Register all three callbacks for the CURRENT thread.
 
     ``agent.vault_backends.unlock`` stores its callbacks in a thread-local, so this
@@ -146,6 +147,7 @@ def install_vault_prompt_callbacks(ask: VaultAsk) -> None:
     set_unlock_prompt_callback(callbacks["unlock"])
     set_save_login_prompt_callback(callbacks["save_login"])
     set_code_prompt_callback(callbacks["code"])
+    set_pasted_secret_scrub_callback(scrub)
 
 
 def clear_vault_prompt_callbacks() -> None:
@@ -154,3 +156,4 @@ def clear_vault_prompt_callbacks() -> None:
     set_unlock_prompt_callback(None)
     set_save_login_prompt_callback(None)
     set_code_prompt_callback(None)
+    set_pasted_secret_scrub_callback(None)
