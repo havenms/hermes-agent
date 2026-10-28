@@ -1244,6 +1244,8 @@ platform:
       secret_button: "🔒 Saisir en privé"
       secret_modal_title: "Réponse privée"
       secret_input_label: "Ta réponse"
+      secret_hint_form: "Tap 🔒 Enter privately to fill in all {count} in one private form. Only you can see it. Or reply here with your email or username."
+      login_form_title: "Your login"
       secret_received: "✅ Reçu. Ta réponse n'a pas été publiée dans le chat."
       secret_not_owner: "Seule la personne qui m'a demandé cela peut répondre."
     picker:

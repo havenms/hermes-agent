@@ -1048,6 +1048,8 @@ platform:
       secret_button: "🔒 Ввести приватно"
       secret_modal_title: "Приватный ответ"
       secret_input_label: "Ваш ответ"
+      secret_hint_form: "Tap 🔒 Enter privately to fill in all {count} in one private form. Only you can see it. Or reply here with your email or username."
+      login_form_title: "Your login"
       secret_received: "✅ Получено. Ваш ответ не опубликован в чате."
       secret_not_owner: "Ответить может только тот, кто меня об этом попросил."
     picker:

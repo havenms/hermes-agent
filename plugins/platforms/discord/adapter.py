@@ -5884,15 +5884,20 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
         except Exception:  # health: allow BLE001 -- no entry means the plain card
             entry = None
         view_cls = globals().get("SecretPromptView")
-        if entry is None or not entry.secret or view_cls is None:
+        form = getattr(entry, "form_fields", None) if entry is not None else None
+        if entry is None or not (entry.secret or form) or view_cls is None:
             return t("platform.discord.prompt.clarify_hint_text"), None
         view = view_cls(
             clarify_id=clarify_id, owner_user_id=entry.owner_user_id,
             allowed_user_ids=self._allowed_user_ids, allowed_role_ids=self._allowed_role_ids,
-            timeout=self._SECRET_PROMPT_VIEW_MAX_S,
+            timeout=self._SECRET_PROMPT_VIEW_MAX_S, form_fields=form,
         )
         self._secret_prompt_views[clarify_id] = view
         view.on_closed = lambda: self._secret_prompt_views.pop(clarify_id, None)
+        if form:
+            # The first login card: one private form for every field; a typed reply still answers
+            # this card only, and the next cards follow.
+            return t("platform.discord.prompt.secret_hint_form", count=len(form)), view
         # The password hint only on a card that asks for a password; an extra login field (PIN,
         # security answer) gets the plain private-box hint.
         asks_password = "password" in str(entry.question or "").casefold()

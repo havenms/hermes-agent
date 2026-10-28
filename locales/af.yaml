@@ -1048,6 +1048,8 @@ platform:
       secret_button: "🔒 Voer privaat in"
       secret_modal_title: "Private antwoord"
       secret_input_label: "Jou antwoord"
+      secret_hint_form: "Tap 🔒 Enter privately to fill in all {count} in one private form. Only you can see it. Or reply here with your email or username."
+      login_form_title: "Your login"
       secret_received: "✅ Ontvang. Jou antwoord is nie in die klets geplaas nie."
       secret_not_owner: "Net die persoon wat my gevra het om dit te doen, kan antwoord."
     picker:

@@ -1048,6 +1048,8 @@ platform:
       secret_button: "🔒 非公開で入力"
       secret_modal_title: "非公開の回答"
       secret_input_label: "回答"
+      secret_hint_form: "Tap 🔒 Enter privately to fill in all {count} in one private form. Only you can see it. Or reply here with your email or username."
+      login_form_title: "Your login"
       secret_received: "✅ 受け取りました。回答はチャットに投稿されていません。"
       secret_not_owner: "これを依頼した人だけが回答できます。"
     picker:

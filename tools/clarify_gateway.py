@@ -45,6 +45,10 @@ class _ClarifyEntry:
     # What the prompt asks for (vault prompts: "save_login", "code", "unlock"); lets an adapter
     # word its private-entry hint. Empty for ordinary clarify questions.
     kind: str = ""
+    # One private form that answers a whole sequence of prompts at once (the vault login: email,
+    # password, extra fields). Each item: {"key", "label", "secret", "pattern"?}. The form answer
+    # resolves this entry with FORM_ANSWER_PREFIX + a JSON object of key -> value. None = no form.
+    form_fields: Optional[list[dict]] = None
     created_at: float = field(default_factory=time.monotonic)
     event: threading.Event = field(default_factory=threading.Event)
     response: Optional[str] = None
@@ -100,13 +104,16 @@ def _is_decline(entry: "_ClarifyEntry", text: str) -> bool:
     word = " ".join(str(text or "").casefold().replace("\u2019", "'").split()).rstrip(".!")
     return word == SKIP_WORD or (entry.owner_user_id is not None and word in DECLINE_WORDS)
 SKIPPED = "\x00skipped"
+# Marks a response that came from one private form (see ``_ClarifyEntry.form_fields``).
+FORM_ANSWER_PREFIX = "\x00form:"
 CANCELLED = "\x00cancelled"
 
 
 def register(clarify_id: str, session_key: str, question: str, choices: Optional[list[str]],
              multi_select: bool = False, secret: bool = False,
              owner_user_id: Optional[str] = None, answer_pattern: Optional[str] = None,
-             chat_guard: bool = False, kind: str = "") -> _ClarifyEntry:
+             chat_guard: bool = False, kind: str = "",
+             form_fields: Optional[list[dict]] = None) -> _ClarifyEntry:
     """Register a pending clarify request; caller then blocks on ``wait_for_response``.
     Open-ended (no choices) entries start in text mode: the next message IS the response.
     ``secret`` marks an answer the adapter should delete from the chat once read.
@@ -116,6 +123,7 @@ def register(clarify_id: str, session_key: str, question: str, choices: Optional
                           bool(multi_select) and bool(choices), secret=bool(secret),
                           owner_user_id=str(owner_user_id) if owner_user_id else None,
                           answer_pattern=answer_pattern or None, chat_guard=bool(chat_guard), kind=kind or "",
+                          form_fields=[dict(f) for f in form_fields] if form_fields else None,
                           awaiting_text=not bool(choices))
     with _lock:
         _entries[clarify_id] = entry
@@ -325,6 +333,33 @@ def attempt_text_response_for_entry(clarify_id: str, response: str,
     if entry is None:
         return TEXT_NO_PENDING
     return _attempt_text_response(entry, response, responder_id, private_form=True)
+
+
+def attempt_form_response_for_entry(clarify_id: str, values: dict,
+                                    responder_id: Optional[str] = None) -> str:
+    """Answer a prompt with its one private form (``form_fields``): every field must have a value of
+    the right shape. Returns a TEXT_* outcome. The values are never logged."""
+    entry = get_pending(clarify_id)
+    if entry is None:
+        return TEXT_NO_PENDING
+    if not may_answer(entry, responder_id):
+        return TEXT_NOT_OWNER
+    if not entry.form_fields:
+        return TEXT_NOT_AN_ANSWER
+    answer: dict[str, str] = {}
+    for item in entry.form_fields:
+        key = str(item.get("key") or "")
+        raw = str((values or {}).get(key) or "")
+        value = raw if item.get("secret") else raw.strip()
+        if not value.strip():
+            return TEXT_NOT_AN_ANSWER
+        pattern = item.get("pattern")
+        if pattern and not re.fullmatch(pattern, value.strip()):
+            return TEXT_NOT_AN_ANSWER
+        answer[key] = value
+    if resolve_gateway_clarify(clarify_id, FORM_ANSWER_PREFIX + json.dumps(answer, ensure_ascii=False)):
+        return TEXT_RESOLVED
+    return TEXT_NO_PENDING
 
 
 def _attempt_text_response(entry: _ClarifyEntry, response: str, responder_id: Optional[str],

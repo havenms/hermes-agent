@@ -24,6 +24,7 @@ from __future__ import annotations
 import logging
 from typing import Callable, Optional
 
+from tools.clarify_gateway import FORM_ANSWER_PREFIX
 from agent.vault_backends.unlock import (
     set_code_prompt_callback,
     set_pasted_secret_scrub_callback,
@@ -32,6 +33,9 @@ from agent.vault_backends.unlock import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Discord shows at most 5 text inputs in one form. A login with more fields asks card by card.
+MAX_FORM_FIELDS = 5
 
 # A surface's blocking ask: (question, secret, last, kind, answer_pattern, chat_guard) -> the reply,
 # "" when unanswered. ``last`` tells the surface whether another question follows in this
@@ -110,16 +114,22 @@ def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
         then the host). A decline at any card stores nothing.
 
         ``notice`` is the plain line from the last rejection ("That password didn't work..."); the
-        first card starts with it."""
+        first card starts with it. On a surface with a private form (Discord), the first card also
+        offers ONE form with every field; its answer completes the whole sequence at once."""
         site = site_label or origin
         extras = [str(x) for x in (extra_fields or ()) if str(x or "").strip()]
         total = 2 + len(extras)
         lead = f"{notice}\n\n" if notice else ""
-        identifier = _clean(ask(
+        form = _login_form_fields(extras) if total <= MAX_FORM_FIELDS and _takes_form(ask) else None
+        first = ask(
             f"{lead}🔑 To get into {site} for you, I need your login (1/{total}).\n\n"
             "Reply with the email or username you use there.",
             secret=False, last=False, kind="save_login", answer_pattern=IDENTIFIER_PATTERN,
-        ))
+            **({"form_fields": form} if form else {}),
+        )
+        if form and str(first or "").startswith(FORM_ANSWER_PREFIX):
+            return _form_answer(str(first), extras)
+        identifier = _clean(first)
         if not identifier:
             return None
         password = ask(
@@ -159,6 +169,45 @@ def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
         "save_login": save_login_prompt,
         "code": code_prompt,
     }
+
+
+def _takes_form(ask: VaultAsk) -> bool:
+    """True when the surface's ask can show one private form (``form_fields``)."""
+    import inspect
+    try:
+        params = inspect.signature(ask).parameters
+    except (TypeError, ValueError):
+        return False
+    return "form_fields" in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
+def _login_form_fields(extras: list) -> list[dict]:
+    """The fields of the one private login form: key, label as the client reads it, secret flag and
+    the answer shape. Discord has no hidden text input, so a secret field says so in its label."""
+    fields = [{"key": "identifier", "label": "Email or username", "secret": False, "pattern": IDENTIFIER_PATTERN},
+              {"key": "password", "label": "Password (secret)", "secret": True}]
+    fields += [{"key": f"extra:{label}", "label": f"{label} (secret)", "secret": True} for label in extras]
+    return fields
+
+
+def _form_answer(raw: str, extras: list) -> Optional[dict]:
+    """The save_login answer from one form submit, or None when a field is missing."""
+    import json
+    try:
+        values = json.loads(raw[len(FORM_ANSWER_PREFIX):])
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(values, dict):
+        return None
+    identifier = _clean(values.get("identifier"))
+    password = str(values.get("password") or "")
+    extra = {label: str(values.get(f"extra:{label}") or "") for label in extras}
+    if not identifier or not password or not all(extra.values()):
+        return None
+    answer: dict = {"identifier": identifier, "password": password}
+    if extras:
+        answer["extra"] = extra
+    return answer
 
 
 def install_vault_prompt_callbacks(ask: VaultAsk, scrub: Optional[Callable[[], bool]] = None) -> None:

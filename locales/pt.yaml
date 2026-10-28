@@ -1048,6 +1048,8 @@ platform:
       secret_button: "🔒 Inserir em privado"
       secret_modal_title: "Resposta privada"
       secret_input_label: "Sua resposta"
+      secret_hint_form: "Tap 🔒 Enter privately to fill in all {count} in one private form. Only you can see it. Or reply here with your email or username."
+      login_form_title: "Your login"
       secret_received: "✅ Recebido. Sua resposta não foi publicada no chat."
       secret_not_owner: "Só a pessoa que me pediu isso pode responder."
     picker:

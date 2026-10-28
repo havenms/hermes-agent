@@ -1048,6 +1048,8 @@ platform:
       secret_button: "🔒 Gizli gir"
       secret_modal_title: "Gizli yanıt"
       secret_input_label: "Yanıtın"
+      secret_hint_form: "Tap 🔒 Enter privately to fill in all {count} in one private form. Only you can see it. Or reply here with your email or username."
+      login_form_title: "Your login"
       secret_received: "✅ Alındı. Yanıtın sohbette paylaşılmadı."
       secret_not_owner: "Yalnızca bunu benden isteyen kişi yanıtlayabilir."
     picker:

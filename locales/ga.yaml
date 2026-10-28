@@ -1048,6 +1048,8 @@ platform:
       secret_button: "🔒 Iontráil go príobháideach"
       secret_modal_title: "Freagra príobháideach"
       secret_input_label: "Do fhreagra"
+      secret_hint_form: "Tap 🔒 Enter privately to fill in all {count} in one private form. Only you can see it. Or reply here with your email or username."
+      login_form_title: "Your login"
       secret_received: "✅ Faighte. Níor postáladh do fhreagra sa chomhrá."
       secret_not_owner: "Ní féidir ach leis an duine a d'iarr orm é seo a dhéanamh freagairt."
     picker:

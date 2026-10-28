@@ -1095,6 +1095,8 @@ platform:
       secret_button: "🔒 Enter privately"
       secret_modal_title: "Private answer"
       secret_input_label: "Your answer"
+      secret_hint_form: "Tap 🔒 Enter privately to fill in all {count} in one private form. Only you can see it. Or reply here with your email or username."
+      login_form_title: "Your login"
       secret_received: "✅ Received. Your answer was not posted in the chat."
       secret_not_owner: "Only the person who asked me to do this can answer."
     # Model / choice pickers (select placeholders ≤ 150, option label/description ≤ 100).
