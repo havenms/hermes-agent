@@ -138,10 +138,18 @@ def _field_from_text(text: str, filled: list[str]) -> Optional[str]:
     for name in filled:  # an extra label named in the message ("That PIN is not right")
         if name not in ("password", "code", "identifier") and _words(name) and _words(name) <= _words(text):
             return name
-    for name, pattern in _FIELD_WORDS:
-        if pattern.search(text):
+    named = [name for name, pattern in _FIELD_WORDS if pattern.search(text)]
+    for name in named:  # a field the vault just typed, named in the message, wins
+        if name in filled:
             return name
+    for name in named:
+        # "Invalid credentials. Or use a verification code" after a password: the code is an offer,
+        # not the field that failed. Blame the code only when the vault typed one.
+        if name == "code" and filled and "code" not in filled:
+            continue
+        return name
     return None
+
 
 def _trim(text: str, limit: int = 160) -> str:
     text = " ".join(str(text or "").split())
