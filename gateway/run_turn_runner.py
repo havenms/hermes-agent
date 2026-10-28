@@ -618,7 +618,8 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
 
     def _vault_ask_sync(self, question: str, secret: bool = False, last: bool = True,
                         kind: str = "code", answer_pattern: Optional[str] = None,
-                        chat_guard: bool = False, form_fields: Optional[list] = None) -> str:
+                        chat_guard: bool = False, form_fields: Optional[list] = None,
+                        need: str = "") -> str:
         """Blocking secret prompt for the vault tools (see gateway/vault_prompts.py).
 
         Rides the same clarify primitive as ``_clarify_callback_sync``, and that is the
@@ -651,7 +652,7 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
         response, answered = self._ask_clarify_question(
             question, None, False, rearm=last, secret=secret, owner_user_id=owner,
             answer_pattern=answer_pattern, timeout=timeout, chat_guard=chat_guard, kind=kind,
-            form_fields=form_fields)
+            form_fields=form_fields, need=need)
         logger.info("Vault prompt %s (kind=%s, secret=%s)", "answered" if answered else "unanswered", kind, secret)
         if not answered or response in (SKIPPED, CANCELLED):
             return ""
@@ -690,7 +691,8 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
                               secret: bool = False, owner_user_id: Optional[str] = None,
                               answer_pattern: Optional[str] = None,
                               timeout: Optional[float] = None, chat_guard: bool = False,
-                              kind: str = "", form_fields: Optional[list] = None) -> tuple[str, bool]:
+                              kind: str = "", form_fields: Optional[list] = None,
+                              need: str = "") -> tuple[str, bool]:
         """One card: register, send, wait, then retire it (no answer) or re-arm (answer).
         Returns ``(response, answered)``; the caller decides what "no answer" means.
 
@@ -723,7 +725,7 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
             clarify_id=clarify_id, session_key=session_key, question=question, choices=choices,
             multi_select=bool(multi_select), secret=bool(secret),
             owner_user_id=owner_user_id, answer_pattern=answer_pattern, chat_guard=chat_guard, kind=kind,
-            form_fields=form_fields,
+            form_fields=form_fields, need=need,
         )
         # Unlike approval, clarify passes reopen=True so the continuation re-opens a native stream
         # below the question; if the re-seed fails the consumer degrades to send() automatically.

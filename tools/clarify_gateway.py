@@ -49,6 +49,11 @@ class _ClarifyEntry:
     # password, extra fields). Each item: {"key", "label", "secret", "pattern"?}. The form answer
     # resolves this entry with FORM_ANSWER_PREFIX + a JSON object of key -> value. None = no form.
     form_fields: Optional[list[dict]] = None
+    # What the card asks for, in plain words ("your email or username for TestCo Books"). The
+    # gateway names it when a reply does not match. Empty for ordinary clarify questions.
+    need: str = ""
+    # How many typed replies did not match this card (see ``note_not_an_answer``).
+    nudges: int = 0
     created_at: float = field(default_factory=time.monotonic)
     event: threading.Event = field(default_factory=threading.Event)
     response: Optional[str] = None
@@ -257,7 +262,7 @@ def register(clarify_id: str, session_key: str, question: str, choices: Optional
              multi_select: bool = False, secret: bool = False,
              owner_user_id: Optional[str] = None, answer_pattern: Optional[str] = None,
              chat_guard: bool = False, kind: str = "",
-             form_fields: Optional[list[dict]] = None) -> _ClarifyEntry:
+             form_fields: Optional[list[dict]] = None, need: str = "") -> _ClarifyEntry:
     """Register a pending clarify request; caller then blocks on ``wait_for_response``.
     Open-ended (no choices) entries start in text mode: the next message IS the response.
     ``secret`` marks an answer the adapter should delete from the chat once read.
@@ -268,7 +273,7 @@ def register(clarify_id: str, session_key: str, question: str, choices: Optional
                           owner_user_id=str(owner_user_id) if owner_user_id else None,
                           answer_pattern=answer_pattern or None, chat_guard=bool(chat_guard), kind=kind or "",
                           form_fields=[dict(f) for f in form_fields] if form_fields else None,
-                          awaiting_text=not bool(choices))
+                          need=str(need or ""), awaiting_text=not bool(choices))
     with _lock:
         _entries[clarify_id] = entry
         _session_index.setdefault(session_key, []).append(clarify_id)
@@ -507,6 +512,30 @@ def attempt_form_response_for_entry(clarify_id: str, values: dict,
     if resolve_gateway_clarify(clarify_id, FORM_ANSWER_PREFIX + json.dumps(answer, ensure_ascii=False)):
         return TEXT_RESOLVED
     return TEXT_NO_PENDING
+
+
+FORM_PROBLEM_EMPTY = "empty"
+FORM_PROBLEM_IDENTIFIER = "identifier"
+FORM_PROBLEM_SHAPE = "shape"
+
+
+def form_problem(clarify_id: str, values: dict) -> Optional[tuple[str, str]]:
+    """The first field of a refused private form, as ``(label, reason)``: ``FORM_PROBLEM_EMPTY``,
+    ``FORM_PROBLEM_IDENTIFIER`` (the email or username box) or ``FORM_PROBLEM_SHAPE``. The label has
+    no "(secret)" suffix. None when no field is wrong or the prompt is gone. Values are never logged."""
+    entry = get_pending(clarify_id)
+    if entry is None or not entry.form_fields:
+        return None
+    for item in entry.form_fields:
+        label = re.sub(r"\s*\(secret\)\s*$", "", str(item.get("label") or item.get("key") or ""))
+        value = str((values or {}).get(str(item.get("key") or "")) or "").strip()
+        if not value:
+            return label, FORM_PROBLEM_EMPTY
+        pattern = item.get("pattern")
+        if pattern and not re.fullmatch(pattern, value):
+            reason = FORM_PROBLEM_IDENTIFIER if item.get("key") == "identifier" else FORM_PROBLEM_SHAPE
+            return label, reason
+    return None
 
 
 def _attempt_text_response(entry: _ClarifyEntry, response: str, responder_id: Optional[str],

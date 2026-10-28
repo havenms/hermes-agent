@@ -107,8 +107,16 @@ def build_secret_prompt_view(discord, base, *, unauthorized):
         async def _ephemeral(self, interaction, text: str) -> None:
             try:
                 await interaction.response.send_message(text, ephemeral=True)
+                return
             except Exception:  # health: allow BLE001 -- an expired interaction token must not break the view
-                logger.debug("Discord secret prompt: ephemeral reply failed (id=%s)", self.clarify_id, exc_info=True)
+                logger.info("Discord secret prompt: ephemeral reply failed, trying a follow-up (id=%s)",
+                            self.clarify_id, exc_info=True)
+            try:
+                # The interaction may already have a response (a slow submit): a follow-up still
+                # reaches only this user.
+                await interaction.followup.send(text, ephemeral=True)
+            except Exception:  # health: allow BLE001 -- best effort, never break the view
+                logger.warning("Discord secret prompt: the client got no reply (id=%s)", self.clarify_id)
 
         async def _on_click(self, interaction) -> None:
             from tools.clarify_gateway import get_pending
@@ -138,14 +146,23 @@ def build_secret_prompt_view(discord, base, *, unauthorized):
             if not self._check_auth(interaction):
                 await self._ephemeral(interaction, unauthorized())
                 return
+            problem = clarify_mod.form_problem(self.clarify_id, values)
             outcome = clarify_mod.attempt_form_response_for_entry(self.clarify_id, values, responder_id=responder)
-            logger.info("Discord login form answer (id=%s, fields=%d, outcome=%s)", self.clarify_id, len(values), outcome)
+            logger.info("Discord login form answer (id=%s, fields=%d, outcome=%s, problem=%s)", self.clarify_id,
+                        len(values), outcome, problem[1] if problem else None)
+            if outcome == clarify_mod.TEXT_NOT_AN_ANSWER and problem:
+                # Say which box and why, at once. The card and its button stay for another try.
+                await self._ephemeral(interaction, form_problem_text(*problem))
+                return
             await self._finish(interaction, outcome)
 
         async def _finish(self, interaction, outcome: str) -> None:
             from tools import clarify_gateway as clarify_mod
             if outcome == clarify_mod.TEXT_NOT_AN_ANSWER:
-                await self._ephemeral(interaction, t("gateway.clarify.not_an_answer"))
+                from gateway.run_inbound import not_an_answer_text
+                entry = clarify_mod.get_pending(self.clarify_id)
+                text = not_an_answer_text(entry) if entry is not None else t("gateway.clarify.not_an_answer")
+                await self._ephemeral(interaction, text + "\n\n" + t("gateway.clarify.try_private_again"))
                 return
             if outcome == clarify_mod.TEXT_NOT_OWNER:
                 await self._ephemeral(interaction, t("platform.discord.prompt.secret_not_owner"))
@@ -284,3 +301,13 @@ def build_held_reply_view(discord, base, *, unauthorized):
                 self.stop()
 
     return HeldReplyView
+
+
+def form_problem_text(label: str, reason: str) -> str:
+    """One plain line for a refused private login form: which box, and why."""
+    from tools import clarify_gateway as clarify_mod
+    if reason == clarify_mod.FORM_PROBLEM_IDENTIFIER:
+        return t("gateway.clarify.form_not_identifier")
+    if reason == clarify_mod.FORM_PROBLEM_EMPTY:
+        return t("gateway.clarify.form_field_empty", field=label)
+    return t("gateway.clarify.form_field_bad", field=label)

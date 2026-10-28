@@ -457,7 +457,7 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
                         _pending_clarify.kind and _pending_clarify.owner_user_id
                         and any(_clarify_mod.looks_like_secret(w) for w in _raw_clarify_reply.split())):
                     await self._scrub_secret_reply(_clarify_adapter, source, event)
-                await self._send_unanchored_notice(_clarify_adapter, source, t("gateway.clarify.not_an_answer"))
+                await self._send_unanchored_notice(_clarify_adapter, source, not_an_answer_text(_pending_clarify))
             return _retain("a reply that does not match the requested value")
         if _text_outcome == _clarify_mod.TEXT_REJECTED_SELECTION:
             # Selection-shaped but invalid (out-of-range number, bad comma-list): keep the clarify
@@ -1962,3 +1962,12 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
             return user_text
         prefix = "\n\n".join(enriched_parts)
         return f"{prefix}\n\n{user_text}" if user_text else prefix
+
+
+def not_an_answer_text(entry) -> str:
+    """The one short line for a reply that does not match an open card. It names the thing the card
+    asks for ("your email or username for TestCo Books") when the card says it."""
+    need = str(getattr(entry, "need", "") or "").strip()
+    if need:
+        return t("gateway.clarify.not_an_answer_named", need=need)
+    return t("gateway.clarify.not_an_answer")

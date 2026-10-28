@@ -112,6 +112,10 @@ def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
     empty secret.
     """
 
+    def _need(text: str) -> dict:
+        """``need=`` for a surface whose ask takes it (the gateway names it on a reply that does not match)."""
+        return {"need": text} if _takes(ask, "need") else {}
+
     def unlock_prompt(backend: str, display_name: str) -> str:
         """Master password for an external password manager. Consumed by the
         manager's CLI to mint a session token; never written to disk."""
@@ -120,6 +124,7 @@ def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
             f"🔐 To use the passwords you keep in {name}, I need its main password.\n\n"
             "Reply with it here. I use it once to open it, I do not keep it, and I remove your message.",
             secret=True, last=True, kind="unlock", chat_guard=True,
+            **_need(f"the main password for {name}"),
         ))
 
     def save_login_prompt(origin: str, site_label: str,
@@ -147,6 +152,7 @@ def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
                 f"{lead}🔑 To get into {site} for you, I need your login (1/{total}).\n\n"
                 "Reply with the email or username you use there.",
                 secret=False, last=False, kind="save_login", answer_pattern=IDENTIFIER_PATTERN,
+                **_need(f"your email or username for {site}"),
                 **({"form_fields": form} if form else {}),
             )
             if form and str(first or "").startswith(FORM_ANSWER_PREFIX):
@@ -168,6 +174,7 @@ def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
             "You can also reply here with just the password. I'll type it in and remove your message. "
             f"{WRONG_LOGIN_LINE}",
             secret=True, last=not extras, kind="save_login", chat_guard=True,
+            **_need(f"your password for {site}"),
         )
         if password == WRONG_ANSWER:
             return _GO_BACK
@@ -181,6 +188,7 @@ def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
                     f"🔑 {site} also asks for your {label} ({n}/{total}).\n\n"
                     "Reply here with just that. I'll type it in and remove your message.",
                     secret=True, last=n == total, kind="save_login", chat_guard=True,
+                    **_need(f"your {label} for {site}"),
                 )
                 if value == WRONG_ANSWER:
                     return _GO_BACK
@@ -197,6 +205,7 @@ def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
         return _clean(ask(
             f"{lead}🔢 {site} just sent a code to your phone or email.\n\nReply with it here.{detail}",
             secret=True, last=True, kind="code", answer_pattern=CODE_PATTERN,
+            **_need(f"the code {site} sent you"),
         ))
 
     return {
@@ -209,14 +218,19 @@ def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
 _GO_BACK = object()  # sentinel: the client said the email or username was wrong
 
 
-def _takes_form(ask: VaultAsk) -> bool:
-    """True when the surface's ask can show one private form (``form_fields``)."""
+def _takes(ask: VaultAsk, name: str) -> bool:
+    """True when the surface's ask takes the keyword ``name`` (or any keyword)."""
     import inspect
     try:
         params = inspect.signature(ask).parameters
     except (TypeError, ValueError):
         return False
-    return "form_fields" in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+    return name in params or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
+def _takes_form(ask: VaultAsk) -> bool:
+    """True when the surface's ask can show one private form (``form_fields``)."""
+    return _takes(ask, "form_fields")
 
 
 def _login_form_fields(extras: list) -> list[dict]:
