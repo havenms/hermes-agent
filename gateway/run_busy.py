@@ -820,6 +820,17 @@ class GatewayBusySessionMixin:
             logger.debug("Busy steer ack suppressed for session %s", session_key)
         return steer_ack_enabled
 
+    def _busy_ack_is_quiet(self, event: MessageEvent) -> bool:
+        """True when ``display.tool_progress`` is ``quiet`` for this platform (client chats)."""
+        try:
+            from gateway.run import _load_gateway_config, _platform_config_key
+            from gateway.display_config import resolve_tool_progress
+            mode, _explicit = resolve_tool_progress(
+                _load_gateway_config(), _platform_config_key(event.source.platform))
+            return mode == "quiet"
+        except Exception:
+            return False
+
     @property
     def _BUSY_DEMOTED_TAIL(self) -> str:
         return t("gateway.busy.demoted_tail")
@@ -879,6 +890,9 @@ class GatewayBusySessionMixin:
         else:
             head, tail = t("gateway.busy.interrupting_head"), t("gateway.busy.interrupting_tail")
         message = t("gateway.busy.ack", head=head, detail=status_detail, tail=tail)
+        if self._busy_ack_is_quiet(event):
+            # Client chats: one plain line, no run, tool, subagent or context words.
+            return t("gateway.busy.quiet_ack")
 
         # One-time onboarding hint about the queue/interrupt knob (flag persisted to config.yaml).
         try:

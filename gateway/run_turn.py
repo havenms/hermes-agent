@@ -1610,6 +1610,8 @@ class GatewayTurnMixin(GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, Gateway
                 "gateway.progress.timeout_last_activity",
                 activity=_last_desc, seconds=f"{_secs_ago:.0f}", progress=_iter_progress))
         _diag_lines.append(t("gateway.progress.timeout_hint"))
+        if getattr(turn_ctx, "progress_mode", None) == "quiet":
+            _diag_lines = [t("gateway.progress.quiet_timeout")]  # no tool name, no counts, no config key
         return record_terminal_failure({
             "final_response": "\n".join(_diag_lines),
             "messages": result_holder[0].get("messages", []) if result_holder[0] else [],
@@ -2264,6 +2266,12 @@ class GatewayTurnMixin(GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, Gateway
                 if _long_running_mode == "generic"
                 else t("gateway.progress.working_heartbeat", minutes=_elapsed_mins, detail=_status_detail)
             )
+            if disp.progress_mode == "quiet":
+                # Client chats: never a tool name, an iteration count or a timer. While the turn
+                # waits on a login card, say nothing: the card already says what is needed.
+                if quiet_heartbeat_blocked(session_key):
+                    continue
+                _heartbeat_text = t("gateway.progress.quiet_heartbeat")
             try:
                 _notify_res = None
                 if _heartbeat_msg_id:
@@ -2401,3 +2409,12 @@ class GatewayTurnMixin(GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, Gateway
         await self._run_agent_mark_streamed_delivery(response, turn_ctx)
         self._run_agent_schedule_bubble_cleanup(response, _cleanup_adapter, turn_ctx)
         return response
+
+
+def quiet_heartbeat_blocked(session_key) -> bool:
+    """True while the session waits on a card for one user (a vault login prompt)."""
+    try:
+        from tools.clarify_gateway import has_pending_owner_prompt
+        return has_pending_owner_prompt(session_key or "")
+    except Exception:
+        return False
