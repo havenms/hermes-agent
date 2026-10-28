@@ -317,13 +317,19 @@ def _cleanup_one_inactive(cache_key: str, elapsed: int) -> None:
 
 def cleanup_inactive_sessions() -> None:
     """Close sessions idle past ``BROWSER_SESSION_INACTIVITY_TIMEOUT`` (janitor thread), each under its owner
-    profile's scope. A human holding the Bot Desktop lease counts as activity."""
+    profile's scope. A human holding the Bot Desktop lease counts as activity, and so does a tool call in
+    flight for the session's task (``tools.browser_session_holds``): a vault prompt waiting for the user's
+    one-time code must find its login page still open."""
+    from tools.browser_session_holds import is_task_held
     bs = _bs()
     now = time.time()
     with bs._cleanup_lock:
         idle = [(key, int(now - last)) for key, last in bs._session_last_activity.items()
                 if now - last > bs.BROWSER_SESSION_INACTIVITY_TIMEOUT]
     for key, elapsed in idle:
+        if is_task_held(bs.owner_task_id(key)) or is_task_held(key):
+            logger.debug("Keeping idle browser session %s: a tool call of its task is in flight", key)
+            continue
         with _session_owner_scope(key):
             if _human_holds_shared_browser(key):
                 update_session_activity(key)

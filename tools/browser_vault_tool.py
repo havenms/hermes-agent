@@ -647,7 +647,11 @@ def _handle_vault(args: dict[str, Any], **kwargs) -> str:
     if action not in page_ops:
         return json.dumps({"success": False, "error": f"Unknown action {action!r}; use list, fill, save_login, "
                                                        "enter_code or unlock."})
-    return _fenced_page_op(tid, page_ops[action])
+    # The tool executor already holds the task's browser; hold it here too, so a direct caller
+    # (plugin, test, other executor) never loses the login page while the user is asked.
+    from tools.browser_session_holds import hold_browser_for_task
+    with hold_browser_for_task(tid):
+        return _fenced_page_op(tid, page_ops[action])
 
 
 from tools.registry import no_cache_check_fn, registry
