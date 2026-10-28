@@ -88,8 +88,8 @@ def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
         manager's CLI to mint a session token; never written to disk."""
         name = display_name or backend
         return _clean(ask(
-            f"🔐 Unlock {name}.\n\nSend your master password in your next message. "
-            f"It is passed to `{backend}` once to open the vault and is not stored.",
+            f"🔐 To use the passwords you keep in {name}, I need its main password.\n\n"
+            "Reply with it here. I use it once to open it, I do not keep it, and I remove your message.",
             secret=True, last=True, kind="unlock",
         ))
 
@@ -104,16 +104,15 @@ def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
         password is sent (the identifier is not a secret: browser_vault list shows it)."""
         host = site_label or origin
         identifier = _clean(ask(
-            f"🔑 Login for {host} (1/2)\n\n"
-            "What email or username should I save for this site? Send only that.",
+            f"🔑 To get into {host} for you, I need your login (1/2).\n\n"
+            "Reply with the email or username you use there.",
             secret=False, last=False, kind="save_login", answer_pattern=IDENTIFIER_PATTERN,
         ))
         if not identifier:
             return None
         password = ask(
-            f"🔑 Login for {host} (2/2)\n\n"
-            f"Now the password for `{identifier}`. It is stored in your local vault and typed "
-            "straight into the page. If the username is wrong, reply skip.",
+            f"🔑 Thanks! Now reply with the password for {identifier} (2/2).\n\n"
+            "I'll type it in and remove your message. If the email or username is wrong, reply skip.",
             secret=True, last=True, kind="save_login",
         )
         if not password:
@@ -124,8 +123,7 @@ def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
         """One-time code the site just sent, for a login with no stored seed."""
         detail = f"\n\n{hint}" if hint else ""
         return _clean(ask(
-            f"🔢 {site} sent you a one-time code.\n\nSend only the code here and I'll enter it "
-            f"into the page.{detail}",
+            f"🔢 {site} just sent a code to your phone or email.\n\nReply with it here.{detail}",
             secret=True, last=True, kind="code", answer_pattern=CODE_PATTERN,
         ))
 
