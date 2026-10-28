@@ -496,7 +496,8 @@ def attempt_form_response_for_entry(clarify_id: str, values: dict,
     for item in entry.form_fields:
         key = str(item.get("key") or "")
         raw = str((values or {}).get(key) or "")
-        value = raw if item.get("secret") else raw.strip()
+        # One rule on every path: the typed reply and the single private box strip spaces too.
+        value = raw.strip()
         if not value.strip():
             return TEXT_NOT_AN_ANSWER
         pattern = item.get("pattern")

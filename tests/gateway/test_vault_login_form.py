@@ -111,8 +111,9 @@ def test_only_the_asking_user_can_submit_the_form():
     assert cm.attempt_form_response_for_entry("f1", values, responder_id=OTHER) == cm.TEXT_NOT_OWNER
     assert not entry.event.is_set()
     assert cm.attempt_form_response_for_entry("f1", values, responder_id=OWNER) == cm.TEXT_RESOLVED
+    # One rule on every path (round 4): spaces around a value are stripped, inner spaces stay.
     assert json.loads(entry.response[len(cm.FORM_ANSWER_PREFIX):]) == {"identifier": "owner",
-                                                                        "password": " pass word "}
+                                                                        "password": "pass word"}
 
 
 @pytest.mark.parametrize("values", [{"identifier": "owner"}, {"identifier": "two words", "password": "pw"},
@@ -234,3 +235,12 @@ async def test_a_typed_reply_retires_the_form_button():
     view, _, _ = await _send_form_card(adapter, "f12")
     await adapter.retire_clarify_card("f12", "✅ answered")
     assert view.resolved and "f12" not in adapter._secret_prompt_views
+def test_the_login_form_strips_spaces_like_the_typed_path():
+    cm.register("f1", KEY, "login", None, owner_user_id=OWNER, kind="save_login",
+                form_fields=[{"key": "identifier", "label": "Email", "secret": False},
+                             {"key": "password", "label": "Password (secret)", "secret": True}])
+    assert cm.attempt_form_response_for_entry("f1", {"identifier": "a@example.com", "password": "  pw  "},
+                                              OWNER) == cm.TEXT_RESOLVED
+    assert json.loads(cm._entries["f1"].response[len(cm.FORM_ANSWER_PREFIX):])["password"] == "pw"
+
+
