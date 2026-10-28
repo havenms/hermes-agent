@@ -866,6 +866,7 @@ gateway:
     task_status_error: "error"
     task_line: "- {title} - {status}"
     task_card_title: "Hermes is working"
+    quiet_working: "Working on it…"
 
   pairing:
     validity_hour: "{hours} hour"

@@ -855,6 +855,7 @@ gateway:
     task_status_error: "hiba"
     task_line: "- {title} - {status}"
     task_card_title: "A Hermes dolgozik"
+    quiet_working: "Dolgozom rajta…"
   pairing:
     validity_hour: "{hours} óra"
     validity_hours: "{hours} óra"

@@ -198,6 +198,12 @@ class GatewayTurnProgressMixin:
             or self._agent_interrupted()
         ):
             return
+        # "quiet" mode (client chats): one plain line per turn, never a tool name or argument.
+        if ctx.progress_mode == "quiet":
+            line = t("gateway.progress.quiet_working")
+            if ctx.last_progress_msg[0] != line:
+                self._progress_emit(line)
+            return
         # "new" mode: only report when tool changes
         if ctx.progress_mode == "new" and tool_name == ctx.last_tool[0]:
             return

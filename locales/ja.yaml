@@ -843,6 +843,7 @@ gateway:
     task_status_error: "エラー"
     task_line: "- {title} - {status}"
     task_card_title: "Hermes が作業中です"
+    quiet_working: "対応中です…"
   pairing:
     validity_hour: "{hours} 時間"
     validity_hours: "{hours} 時間"

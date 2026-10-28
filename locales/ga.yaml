@@ -843,6 +843,7 @@ gateway:
     task_status_error: "earráid"
     task_line: "- {title} - {status}"
     task_card_title: "Tá Hermes ag obair"
+    quiet_working: "Ag obair air…"
   pairing:
     validity_hour: "{hours} uair an chloig"
     validity_hours: "{hours} uair an chloig"

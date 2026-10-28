@@ -843,6 +843,7 @@ gateway:
     task_status_error: "hata"
     task_line: "- {title} - {status}"
     task_card_title: "Hermes çalışıyor"
+    quiet_working: "Üzerinde çalışıyorum…"
   pairing:
     validity_hour: "{hours} saat"
     validity_hours: "{hours} saat"

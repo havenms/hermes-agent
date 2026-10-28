@@ -478,7 +478,7 @@ def setup_agent_settings(config: dict):
                   current_mode)
     if not mode and not current_mode:
         print_info("Keeping each platform's default tool progress")
-    elif mode.lower() in {"off", "new", "all", "verbose", "log"}:
+    elif mode.lower() in {"off", "new", "all", "verbose", "log", "quiet"}:
         config.setdefault("display", {})["tool_progress"] = mode.lower()
         save_config(config)
         print_success(f"Tool progress set to: {mode.lower()}")

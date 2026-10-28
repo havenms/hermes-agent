@@ -30,8 +30,8 @@ def normalize_tool_progress_mode(mode: object, default: str = "all") -> str:
     if mode is True:
         return "all"
     text = str(mode or "").strip().lower()
-    # ``log`` is a real gateway mode; any other unknown value becomes the default.
-    return text if text in TOOL_PROGRESS_MODES or text == "log" else default
+    # ``log`` and ``quiet`` are real gateway modes; any other unknown value becomes the default.
+    return text if text in TOOL_PROGRESS_MODES or text in ("log", "quiet") else default
 
 
 def resolve_focus_arg(arg: str, current: bool) -> tuple[str, Optional[bool]]:

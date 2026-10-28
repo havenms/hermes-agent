@@ -843,6 +843,7 @@ gateway:
     task_status_error: "Fehler"
     task_line: "- {title} - {status}"
     task_card_title: "Hermes arbeitet"
+    quiet_working: "Ich arbeite daran…"
   pairing:
     validity_hour: "{hours} Stunde"
     validity_hours: "{hours} Stunden"
