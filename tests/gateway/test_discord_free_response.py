@@ -232,6 +232,38 @@ async def test_discord_accepts_and_strips_bot_mentions_when_required(adapter, mo
 
 
 @pytest.mark.asyncio
+async def test_discord_accepts_and_strips_bot_role_mention_when_required(adapter, monkeypatch):
+    """Autocomplete offers the bot's managed role next to the bot user; a ping of
+    that role must count as a mention of the bot."""
+    monkeypatch.setenv("DISCORD_REQUIRE_MENTION", "true")
+    monkeypatch.setenv("DISCORD_AUTO_THREAD", "false")
+
+    channel = FakeTextChannel(channel_id=321)
+    channel.guild = SimpleNamespace(name="Hermes Server", self_role=SimpleNamespace(id=555))
+    message = make_message(channel=channel, content="<@&555> find podcasters")
+
+    await adapter._handle_message(message)
+
+    adapter.handle_message.assert_awaited_once()
+    event = adapter.handle_message.await_args.args[0]
+    assert event.text == "find podcasters"
+
+
+@pytest.mark.asyncio
+async def test_discord_ignores_other_role_mentions_when_required(adapter, monkeypatch):
+    monkeypatch.setenv("DISCORD_REQUIRE_MENTION", "true")
+    monkeypatch.setenv("DISCORD_AUTO_THREAD", "false")
+
+    channel = FakeTextChannel(channel_id=321)
+    channel.guild = SimpleNamespace(name="Hermes Server", self_role=SimpleNamespace(id=555))
+    message = make_message(channel=channel, content="<@&777> find podcasters")
+
+    await adapter._handle_message(message)
+
+    adapter.handle_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_unmentioned_bot_chunks_join_recent_tag_batch(adapter, monkeypatch):
     monkeypatch.setenv("DISCORD_REQUIRE_MENTION", "true")
     monkeypatch.setenv("DISCORD_AUTO_THREAD", "false")

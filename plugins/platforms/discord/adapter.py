@@ -5151,7 +5151,23 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
             return False
         if self._client.user in getattr(message, "mentions", []):
             return True
-        return str(self._client.user.id) in self._raw_mentioned_user_ids(message)
+        if str(self._client.user.id) in self._raw_mentioned_user_ids(message):
+            return True
+        return bool(self._self_role_ids(message) & self._raw_mentioned_role_ids(message))
+
+    def _raw_mentioned_role_ids(self, message: Any) -> set:
+        """Extract role-mention IDs (``<@&ID>``) from raw content."""
+        content = getattr(message, "content", "") or ""
+        return {match.group(1) for match in re.finditer(r"<@&(\d+)>", content)}
+
+    def _self_role_ids(self, message: Any) -> set:
+        """ID of this bot's managed role in the message's guild. Discord autocomplete
+        offers that role next to the bot user and both show as "@<bot name>", so
+        users often ping the role when they mean the bot."""
+        guild = getattr(message, "guild", None) or getattr(getattr(message, "channel", None), "guild", None)
+        role = getattr(guild, "self_role", None) if guild else None
+        role_id = getattr(role, "id", None)
+        return {str(role_id)} if role_id else set()
 
     def _self_is_raw_mentioned(self, message: Any) -> bool:
         """True only for a literal ``<@bot>`` token: reply-pings add us to ``message.mentions``
@@ -6272,6 +6288,8 @@ class DiscordAdapter(DiscordAuthorizationMixin, DiscordMediaMixin, DiscordThread
             if self._client.user:
                 normalized_content = normalized_content.replace(f"<@{self._client.user.id}>", "").strip()
                 normalized_content = normalized_content.replace(f"<@!{self._client.user.id}>", "").strip()
+            for role_id in self._self_role_ids(message):
+                normalized_content = normalized_content.replace(f"<@&{role_id}>", "").strip()
             message.content = normalized_content
         if not isinstance(message.channel, discord.DMChannel):
             channel_ids = {str(message.channel.id)}
