@@ -35,6 +35,8 @@ _WHATSAPP_NATIVE_KEYS = frozenset({'video', 'audio', 'sticker', 'location', 'con
                                    'reaction', 'poll', 'pollUpdate'})
 _WHATSAPP_NATIVE_MAX_BYTES = 16 * 1024
 _MEDIA_FIELDS = ('media_urls', 'media_types', 'media_text_inlined')
+# Same value as gateway.run_inbound.CLARIFY_BYPASS_KEY (no import: run_inbound imports this module's users).
+_CLARIFY_BYPASS_KEY = 'tapas_clarify_bypass'
 
 
 def _native_metadata(event):
@@ -43,8 +45,19 @@ def _native_metadata(event):
     metadata = event.metadata
     if not metadata:
         return {}
-    if (not isinstance(metadata, dict) or event.source.platform.value != 'whatsapp'
-            or not set(metadata) <= _WHATSAPP_METADATA):
+    if not isinstance(metadata, dict):
+        return None
+    # TAPAS: the takeover-page "done" (gateway inject) carries one gateway flag, on any platform,
+    # so an open login card does not swallow it. Keep it through the replay; it is a bool only.
+    bypass = {}
+    if _CLARIFY_BYPASS_KEY in metadata:
+        if metadata[_CLARIFY_BYPASS_KEY] is not True:
+            return None
+        bypass = {_CLARIFY_BYPASS_KEY: True}
+        metadata = {k: v for k, v in metadata.items() if k != _CLARIFY_BYPASS_KEY}
+        if not metadata:
+            return bypass
+    if event.source.platform.value != 'whatsapp' or not set(metadata) <= _WHATSAPP_METADATA:
         return None
     kind, native = metadata.get('whatsapp_native_type'), metadata.get('whatsapp_native')
     if (kind is not None and not (isinstance(kind, str) and 0 < len(kind) <= 64)
@@ -52,6 +65,7 @@ def _native_metadata(event):
             or native is not None and not (isinstance(native, dict) and set(native) <= _WHATSAPP_NATIVE_KEYS)):
         return None
     projected = {key: metadata[key] for key in ('whatsapp_native_type', 'whatsapp_from_owner') if key in metadata}
+    projected.update(bypass)
     if native is not None:
         try:
             encoded = json.dumps(native, ensure_ascii=False, allow_nan=False)
