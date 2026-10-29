@@ -302,6 +302,10 @@ def browser_vault_save_login(label: str = "", task_id: Optional[str] = None,
     """Ask the user (masked prompt on their surface) for the login of the CURRENT page, store it in the local
     vault bound to that origin, and fill the password at once. The values never enter the conversation.
 
+    ``identifier`` alone (no ``password``): the agent already knows the email or username (it typed it on
+    the page, or the client said it). Then the prompt asks only for the password and any extra fields,
+    and the login is stored with that identifier. A surface whose prompt cannot take it asks for both.
+
     Fallback: when the user already pasted the login in a normal chat message, the agent passes it as
     ``identifier`` + ``password``. It is stored exactly as a prompted login (same origin binding), the
     password is registered with the model-egress redaction boundary first, and the surface is asked to
@@ -357,9 +361,11 @@ def browser_vault_save_login(label: str = "", task_id: Optional[str] = None,
             return json.dumps({"success": False, "error_type": "extra_fields_unsupported", "error": (
                 "This surface can only ask for an email and a password. Ask the client to send the other "
                 f"fields ({', '.join(labels)}) in chat, then call save_login with identifier, password and extra.")})
-        answer = prompt(origin, shown, extra_fields=tuple(labels), **_notice_kw(prompt, notice))
+        answer = prompt(origin, shown, extra_fields=tuple(labels), **_notice_kw(prompt, notice),
+                        **_known_identifier_kw(prompt, identifier, effective_task_id, origin))
     else:
-        answer = prompt(origin, shown, **_notice_kw(prompt, notice))
+        answer = prompt(origin, shown, **_notice_kw(prompt, notice),
+                        **_known_identifier_kw(prompt, identifier, effective_task_id, origin))
     if answer and labels and set((answer.get("extra") or {})) != set(labels):
         answer = None  # the client stopped part way: store nothing half-done
     if not answer and _cancelled_by_message():
@@ -433,6 +439,20 @@ def _accepts_kw(fn: Any, name: str) -> bool:
 def _notice_kw(prompt: Any, notice: str) -> dict:
     """``{"notice": ...}`` for a prompt that can show the "that did not work" line, else ``{}``."""
     return {"notice": notice} if notice and _accepts_kw(prompt, "notice") else {}
+
+
+def _known_identifier_kw(prompt: Any, identifier: str, task_id: str, origin: str) -> dict:
+    """``{"identifier": ...}`` when the agent already knows the email or username and the surface's
+    prompt can take it, so only the password (and any extra field) is asked. Empty when the site
+    refused that identifier last time: then the client is asked for it again."""
+    known = str(identifier or "").strip()
+    if not known or not _accepts_kw(prompt, "identifier"):
+        return {}
+    from agent.vault_outcome import TRACKER
+    pending = TRACKER.pending(task_id, origin, ["identifier"])
+    if pending is not None and pending.get("field") == "identifier":
+        return {}
+    return {"identifier": known}
 
 
 def _retry_gate(task_id: str, origin: str, fields: list, site: str) -> "str | dict":
@@ -1021,7 +1041,8 @@ BROWSER_VAULT_SCHEMA = {
         "yourself with the browser's input tool; locked password managers appear under `locked`); fill (handle: "
         "the password for a login, card fields after the user confirms, address fields; refused unless the page "
         "origin matches the item); save_login (nothing saved for this site: the client enters it in a login prompt, "
-        "Hermes saves and fills it; fallback: if the client already pasted the login in chat, pass identifier and "
+        "Hermes saves and fills it. If you already know the username, pass identifier= and only the password is "
+        "asked. Fallback: if the client already pasted the login in chat, pass identifier and "
         "password and it is saved the same way; when the form also asks for another secret such as a PIN or a "
         "security answer, pass its page label in extra_fields and the client is asked for it too); fill_field "
         "(handle, field, optional ref: type one named secret of a saved login, e.g. field=PIN, into one page "
@@ -1053,7 +1074,9 @@ BROWSER_VAULT_SCHEMA = {
             "backend": {"type": "string", "enum": ["onepassword", "bitwarden"], "description": "unlock only."},
             "label": {"type": "string", "description": "save_login / check: short site name (default: the host)."},
             "identifier": {"type": "string", "description": (
-                "save_login fallback only: the email or username the client already pasted in chat.")},
+                "save_login only: the email or username you already know (you typed it on the page, or the "
+                "client said it). Alone, the client is asked only for the password. With password: the "
+                "login the client already pasted in chat.")},
             "password": {"type": "string", "description": (
                 "save_login fallback only: the password the client already pasted in chat. Omit both to "
                 "ask the client in a prompt (preferred).")},

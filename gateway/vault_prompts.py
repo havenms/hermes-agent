@@ -151,8 +151,8 @@ def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
             **_need(f"the main password for {name}"),
         ))
 
-    def save_login_prompt(origin: str, site_label: str,
-                          extra_fields: tuple = (), notice: str = "") -> Optional[dict]:
+    def save_login_prompt(origin: str, site_label: str, extra_fields: tuple = (), notice: str = "",
+                          identifier: str = "") -> Optional[dict]:
         """Identifier + password (+ any extra secret fields) for the page currently open. Stored in
         the local vault bound to ``origin`` and filled into the page at once.
 
@@ -165,11 +165,25 @@ def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
 
         ``notice`` is the plain line from the last rejection ("That password didn't work..."); the
         first card starts with it. On a surface with a private form (Discord), the first card also
-        offers ONE form with every field; its answer completes the whole sequence at once."""
+        offers ONE form with every field; its answer completes the whole sequence at once.
+
+        ``identifier`` is the email or username the bot already knows (TAPAS: it typed it on the page,
+        or the client said it). Then only the password and the extra fields are asked, numbered from
+        (1/N), and the private form shows only those fields. The given identifier is stored with the
+        login. A "wrong email" reply goes to the email or username card."""
         site = site_label or origin
         extras = [str(x) for x in (extra_fields or ()) if str(x or "").strip()]
-        total = 2 + len(extras)
         lead = f"{notice}\n\n" if notice else ""
+        known = _clean(identifier)
+        if known:
+            total = 1 + len(extras)
+            form = (_login_form_fields(extras, with_identifier=False)
+                    if total <= MAX_FORM_FIELDS and _takes_form(ask) else None)
+            answer = _ask_secrets(known, site, extras, total, first=1, lead=lead, form=form)
+            if answer is not _GO_BACK:
+                return answer
+            lead = "No problem. Let's fix the email or username first.\n\n"
+        total = 2 + len(extras)
         form = _login_form_fields(extras) if total <= MAX_FORM_FIELDS and _takes_form(ask) else None
         for _redo in range(MAX_IDENTIFIER_REDO + 1):
             first = ask(
@@ -191,15 +205,27 @@ def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
             lead = "No problem. Let's fix the email or username first.\n\n"
         return None
 
-    def _ask_secrets(identifier: str, site: str, extras: list, total: int):
-        """Cards 2..N. ``_GO_BACK`` when the client says the email or username was wrong."""
+    def _ask_secrets(identifier: str, site: str, extras: list, total: int, first: int = 2,
+                     lead: str = "", form: Optional[list] = None):
+        """The password card, then one card per extra field, numbered from ``first``. ``first=1``:
+        the identifier is already known, so the password card is the first card and may carry the
+        private ``form``. ``_GO_BACK`` when the client says the email or username was wrong."""
+        if first == 1:
+            question = (f"{lead}🔑 To get into {site} for you as {identifier}, I need your password "
+                        f"(1/{total}).\n\n"
+                        "Reply here with just the password. I'll type it in and remove your message. "
+                        f"{WRONG_LOGIN_LINE}")
+        else:
+            question = (f"🔑 Thanks! Now I need the password for {identifier} ({first}/{total}).\n\n"
+                        "You can also reply here with just the password. I'll type it in and remove your "
+                        f"message. {WRONG_LOGIN_LINE}")
         password = ask(
-            f"🔑 Thanks! Now I need the password for {identifier} (2/{total}).\n\n"
-            "You can also reply here with just the password. I'll type it in and remove your message. "
-            f"{WRONG_LOGIN_LINE}",
-            secret=True, last=not extras, kind="save_login", chat_guard=True,
+            question, secret=True, last=not extras, kind="save_login", chat_guard=True,
             **_need(f"your password for {site}"),
+            **({"form_fields": form} if form else {}),
         )
+        if form and str(password or "").startswith(FORM_ANSWER_PREFIX):
+            return _form_answer(str(password), extras, identifier=identifier)
         if password == WRONG_ANSWER:
             return _GO_BACK
         if not password:
@@ -207,7 +233,7 @@ def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
         answer: dict = {"identifier": identifier, "password": password}
         if extras:
             answer["extra"] = {}
-            for n, label in enumerate(extras, start=3):
+            for n, label in enumerate(extras, start=first + 1):
                 value = ask(
                     f"🔑 {site} also asks for your {label} ({n}/{total}).\n\n"
                     "Reply here with just that. I'll type it in and remove your message.",
@@ -257,18 +283,20 @@ def _takes_form(ask: VaultAsk) -> bool:
     return _takes(ask, "form_fields")
 
 
-def _login_form_fields(extras: list) -> list[dict]:
+def _login_form_fields(extras: list, with_identifier: bool = True) -> list[dict]:
     """The fields of the one private login form: key, label as the client reads it and
     the secret flag. Discord has no hidden text input, so a secret field says so in its label. No field
-    has a shape check: the client typed each value into a labeled box on purpose."""
-    fields = [{"key": "identifier", "label": "Email or username", "secret": False},
-              {"key": "password", "label": "Password (secret)", "secret": True}]
+    has a shape check: the client typed each value into a labeled box on purpose. ``with_identifier``
+    False leaves out the email or username box (the bot already knows it)."""
+    fields = [{"key": "identifier", "label": "Email or username", "secret": False}] if with_identifier else []
+    fields += [{"key": "password", "label": "Password (secret)", "secret": True}]
     fields += [{"key": f"extra:{label}", "label": f"{label} (secret)", "secret": True} for label in extras]
     return fields
 
 
-def _form_answer(raw: str, extras: list) -> Optional[dict]:
-    """The save_login answer from one form submit, or None when a field is missing."""
+def _form_answer(raw: str, extras: list, identifier: str = "") -> Optional[dict]:
+    """The save_login answer from one form submit, or None when a field is missing. ``identifier``
+    is the known email or username for a form without that box."""
     import json
     try:
         values = json.loads(raw[len(FORM_ANSWER_PREFIX):])
@@ -276,7 +304,7 @@ def _form_answer(raw: str, extras: list) -> Optional[dict]:
         return None
     if not isinstance(values, dict):
         return None
-    identifier = _clean(values.get("identifier"))
+    identifier = _clean(identifier) or _clean(values.get("identifier"))
     password = str(values.get("password") or "")
     extra = {label: str(values.get(f"extra:{label}") or "") for label in extras}
     if not identifier or not password or not all(extra.values()):
