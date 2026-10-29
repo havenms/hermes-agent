@@ -78,7 +78,8 @@ def test_clear_removes_every_callback():
 def test_unlock_prompt_returns_the_master_password():
     ask = _Recorder("  hunter2  ")
     callbacks = build_vault_prompt_callbacks(ask)
-    assert callbacks["unlock"]("onepassword", "1Password") == "hunter2"
+    # Round 6: a password is never trimmed.
+    assert callbacks["unlock"]("onepassword", "1Password") == "  hunter2  "
     assert ask.secret_flags == [True], "a master password must be marked secret"
 
 

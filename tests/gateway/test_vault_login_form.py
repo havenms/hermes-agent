@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from gateway.config import PlatformConfig
-from gateway.vault_prompts import IDENTIFIER_PATTERN, MAX_FORM_FIELDS, build_vault_prompt_callbacks
+from gateway.vault_prompts import MAX_FORM_FIELDS, build_vault_prompt_callbacks
 from tools import clarify_gateway as cm
 
 KEY = "agent:main:discord:dm:1001"
@@ -51,7 +51,7 @@ def test_the_first_card_offers_one_form_with_every_field_and_a_submit_answers_al
     form = asked[0][1]["form_fields"]
     assert [f["key"] for f in form] == ["identifier", "password", "extra:PIN"]
     assert [f["secret"] for f in form] == [False, True, True]
-    assert form[0]["pattern"] == IDENTIFIER_PATTERN
+    assert all("pattern" not in f for f in form), "round 6: the private form has no shape check"
     assert "(secret)" in form[1]["label"] and "PIN" in form[2]["label"]
     assert "(1/3)" in asked[0][0]
 
@@ -101,7 +101,7 @@ def test_a_form_answer_with_a_missing_field_stores_nothing():
 
 # ── clarify_gateway: the form answer ─────────────────────────────────────────────────────────
 
-FORM = [{"key": "identifier", "label": "Email or username", "secret": False, "pattern": IDENTIFIER_PATTERN},
+FORM = [{"key": "identifier", "label": "Email or username", "secret": False},
         {"key": "password", "label": "Password (secret)", "secret": True}]
 
 
@@ -111,12 +111,12 @@ def test_only_the_asking_user_can_submit_the_form():
     assert cm.attempt_form_response_for_entry("f1", values, responder_id=OTHER) == cm.TEXT_NOT_OWNER
     assert not entry.event.is_set()
     assert cm.attempt_form_response_for_entry("f1", values, responder_id=OWNER) == cm.TEXT_RESOLVED
-    # One rule on every path (round 4): spaces around a value are stripped, inner spaces stay.
+    # Round 6: a password is kept as typed. Only the identifier loses the spaces at its ends.
     assert json.loads(entry.response[len(cm.FORM_ANSWER_PREFIX):]) == {"identifier": "owner",
-                                                                        "password": "pass word"}
+                                                                        "password": " pass word "}
 
 
-@pytest.mark.parametrize("values", [{"identifier": "owner"}, {"identifier": "two words", "password": "pw"},
+@pytest.mark.parametrize("values", [{"identifier": "owner"}, {"identifier": "owner", "password": "   "},
                                     {"identifier": "", "password": "pw"}])
 def test_a_form_with_a_missing_or_bad_field_keeps_the_prompt_open(values):
     entry = cm.register("f2", KEY, "login?", None, owner_user_id=OWNER, form_fields=FORM)
@@ -235,12 +235,43 @@ async def test_a_typed_reply_retires_the_form_button():
     view, _, _ = await _send_form_card(adapter, "f12")
     await adapter.retire_clarify_card("f12", "✅ answered")
     assert view.resolved and "f12" not in adapter._secret_prompt_views
-def test_the_login_form_strips_spaces_like_the_typed_path():
+def test_the_login_form_keeps_the_password_as_typed():
     cm.register("f1", KEY, "login", None, owner_user_id=OWNER, kind="save_login",
                 form_fields=[{"key": "identifier", "label": "Email", "secret": False},
                              {"key": "password", "label": "Password (secret)", "secret": True}])
-    assert cm.attempt_form_response_for_entry("f1", {"identifier": "a@example.com", "password": "  pw  "},
+    assert cm.attempt_form_response_for_entry("f1", {"identifier": "  a@example.com ", "password": "  pw  "},
                                               OWNER) == cm.TEXT_RESOLVED
-    assert json.loads(cm._entries["f1"].response[len(cm.FORM_ANSWER_PREFIX):])["password"] == "pw"
+    answer = json.loads(cm._entries["f1"].response[len(cm.FORM_ANSWER_PREFIX):])
+    assert answer == {"identifier": "a@example.com", "password": "  pw  "}
+
+
+@pytest.mark.parametrize("values", [
+    {"identifier": "MICHAEL PERSONETTE", "password": "pw"},
+    {"identifier": "two words", "password": "pw"},
+    {"identifier": "x", "password": "a b c"},
+    {"identifier": "hi", "password": "?"},
+])
+def test_the_login_form_takes_any_value_that_is_not_empty(values):
+    # Round 6, live 2026-10-29: the form refused "MICHAEL PERSONETTE" as not an email or username.
+    entry = cm.register("f9", KEY, "login?", None, owner_user_id=OWNER, form_fields=FORM)
+    assert cm.attempt_form_response_for_entry("f9", values, responder_id=OWNER) == cm.TEXT_RESOLVED
+    assert json.loads(entry.response[len(cm.FORM_ANSWER_PREFIX):]) == values
+
+
+def test_the_private_box_skips_the_shape_check_but_the_chat_keeps_it():
+    from gateway.vault_prompts import CODE_PATTERN
+    entry = cm.register("f10", KEY, "code?", None, secret=True, owner_user_id=OWNER, answer_pattern=CODE_PATTERN,
+                        kind="code")
+    assert cm.attempt_text_response_for_session(KEY, "hello", OWNER) == cm.TEXT_NOT_AN_ANSWER
+    assert cm.attempt_text_response_for_entry("f10", "  abc  ", OWNER) == cm.TEXT_RESOLVED
+    assert entry.response == "abc", "a code loses the spaces at its ends"
+
+
+def test_the_private_password_box_keeps_the_value_as_typed():
+    entry = cm.register("f11", KEY, "pw?", None, secret=True, owner_user_id=OWNER, kind="save_login",
+                        chat_guard=True)
+    assert cm.attempt_text_response_for_entry("f11", "   ", OWNER) == cm.TEXT_NOT_AN_ANSWER
+    assert cm.attempt_text_response_for_entry("f11", " my pass ", OWNER) == cm.TEXT_RESOLVED
+    assert entry.response == " my pass "
 
 

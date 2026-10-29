@@ -32,10 +32,12 @@ def _clean_clarify_state():
 
 # ── the reason for a refused form ───────────────────────────────────────────────────────────
 
-def test_form_problem_names_the_email_box_when_it_is_not_an_email():
+def test_form_problem_takes_any_username_the_client_typed():
+    # Round 6: the private form has no shape check (live: "MICHAEL PERSONETTE" was refused).
     cm.register("p1", KEY, "login?", None, owner_user_id=OWNER, form_fields=FORM)
-    assert cm.form_problem("p1", {"identifier": "two words", "password": "pw"}) == (
-        "Email or username", cm.FORM_PROBLEM_IDENTIFIER)
+    assert cm.form_problem("p1", {"identifier": "MICHAEL PERSONETTE", "password": "pw"}) is None
+    assert cm.form_problem("p1", {"identifier": "  ", "password": "pw"}) == (
+        "Email or username", cm.FORM_PROBLEM_EMPTY)
 
 
 def test_form_problem_names_an_empty_box_without_the_secret_suffix():
@@ -144,19 +146,19 @@ async def _send_form_card(adapter, clarify_id):
 
 
 @pytest.mark.asyncio
-async def test_a_bad_email_in_the_form_gets_an_ephemeral_line_and_the_card_stays():
+async def test_an_empty_box_in_the_form_gets_an_ephemeral_line_and_the_card_stays():
     adapter = _discord_adapter()
     view = await _send_form_card(adapter, "d1")
     owner = _interaction()
-    await view.submit_form(owner, {"identifier": "not an email", "password": "Summer2024?"})
+    await view.submit_form(owner, {"identifier": "   ", "password": "Summer2024?"})
     reply = owner.response.send_message.call_args
     assert reply.kwargs.get("ephemeral") is True
-    assert "does not look like an email address" in reply.args[0]
+    assert "Email or username" in reply.args[0]
     assert "Summer2024?" not in reply.args[0]
     assert cm.get_pending("d1") is not None and not view.resolved
     # Another try on the same card works.
     again = _interaction()
-    await view.submit_form(again, {"identifier": "owner@example.com", "password": "Summer2024?"})
+    await view.submit_form(again, {"identifier": "MICHAEL PERSONETTE", "password": "Summer2024?"})
     assert cm.get_pending("d1") is None
 
 

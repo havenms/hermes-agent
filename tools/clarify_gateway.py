@@ -38,6 +38,7 @@ class _ClarifyEntry:
     # Regex a typed reply to an open-ended prompt must fully match to count as the answer
     # (``skip`` always counts). A vault prompt can wait for hours; without this the first
     # unrelated message after the wait would be taken as the username or the one-time code.
+    # The private form path skips this.
     answer_pattern: Optional[str] = None
     # A typed reply to a password prompt that reads like chat ("hey did that work?") is never
     # taken as the password (see :func:`looks_like_chat`). The private form path skips this.
@@ -46,7 +47,7 @@ class _ClarifyEntry:
     # word its private-entry hint. Empty for ordinary clarify questions.
     kind: str = ""
     # One private form that answers a whole sequence of prompts at once (the vault login: email,
-    # password, extra fields). Each item: {"key", "label", "secret", "pattern"?}. The form answer
+    # password, extra fields). Each item: {"key", "label", "secret"}. The form answer
     # resolves this entry with FORM_ANSWER_PREFIX + a JSON object of key -> value. None = no form.
     form_fields: Optional[list[dict]] = None
     # What the card asks for, in plain words ("your email or username for TestCo Books"). The
@@ -472,13 +473,16 @@ def _coerce_text_response(entry: _ClarifyEntry, response: str) -> Optional[str]:
     return _coerce_text_response_detailed(entry, response)[0]
 
 
-def _coerce_text_response_detailed(entry: _ClarifyEntry, response: str) -> tuple[Optional[str], Optional[str]]:
+def _coerce_text_response_detailed(entry: _ClarifyEntry, response: str,
+                                   private_form: bool = False) -> tuple[Optional[str], Optional[str]]:
     """Map a typed reply to ``(value, None)`` or ``(None, reason)``: ``"invalid_selection"``
     (selection-shaped but out of range/unrecognised — keep the clarify armed for a retry) or
     ``"prose"`` (free text on a native choice prompt — the gateway may cancel and route normally
     so a redirect-to-steer path cannot deadlock behind the waiting tool). Open-ended entries and
     ``awaiting_text`` accept any text; numeric picks and exact labels always resolve; multi-select
-    returns a JSON array string (decoded tool-side); one bad token rejects the whole reply."""
+    returns a JSON array string (decoded tool-side); one bad token rejects the whole reply.
+    ``private_form``: the answer came from a private box (the Discord modal). TAPAS: it skips the
+    ``answer_pattern`` check, and a password keeps the spaces at its ends."""
     text = str(response).strip()
     is_skip = _is_decline(entry, text)
     if not entry.choices:
@@ -486,6 +490,11 @@ def _coerce_text_response_detailed(entry: _ClarifyEntry, response: str) -> tuple
             return SKIPPED, None
         if _is_wrong(entry, text):
             return WRONG_ANSWER, None
+        if private_form:
+            # The client typed it into a labeled box on purpose: any value that is not empty.
+            if not text:
+                return None, "not_an_answer"
+            return (str(response) if _keeps_ends(entry) else text), None
         if entry.answer_pattern and not re.fullmatch(entry.answer_pattern, text):
             return None, "not_an_answer"
         return text, None
@@ -504,6 +513,12 @@ def _coerce_text_response_detailed(entry: _ClarifyEntry, response: str) -> tuple
     if entry.awaiting_text:
         return text, None
     return None, "invalid_selection" if selection_shaped else "prose"
+
+
+def _keeps_ends(entry: _ClarifyEntry) -> bool:
+    """True for a password box: a secret prompt that is not a one-time code. Its value is used as
+    typed, with no trim."""
+    return bool(entry.secret) and entry.kind != "code"
 
 
 def _coerce_multi_select_text(entry: _ClarifyEntry, text: str) -> Optional[str]:
@@ -548,8 +563,10 @@ def attempt_text_response_for_entry(clarify_id: str, response: str,
 
 def attempt_form_response_for_entry(clarify_id: str, values: dict,
                                     responder_id: Optional[str] = None) -> str:
-    """Answer a prompt with its one private form (``form_fields``): every field must have a value of
-    the right shape. Returns a TEXT_* outcome. The values are never logged."""
+    """Answer a prompt with its one private form (``form_fields``): every field must have a value.
+    TAPAS: there is no shape check, because the client typed each value into a labeled box on
+    purpose. A field that is not secret loses the spaces at its ends; a secret one is kept as
+    typed. Returns a TEXT_* outcome. The values are never logged."""
     entry = get_pending(clarify_id)
     if entry is None:
         return TEXT_NO_PENDING
@@ -561,14 +578,9 @@ def attempt_form_response_for_entry(clarify_id: str, values: dict,
     for item in entry.form_fields:
         key = str(item.get("key") or "")
         raw = str((values or {}).get(key) or "")
-        # One rule on every path: the typed reply and the single private box strip spaces too.
-        value = raw.strip()
-        if not value.strip():
+        if not raw.strip():
             return TEXT_NOT_AN_ANSWER
-        pattern = item.get("pattern")
-        if pattern and not re.fullmatch(pattern, value.strip()):
-            return TEXT_NOT_AN_ANSWER
-        answer[key] = value
+        answer[key] = raw if item.get("secret") else raw.strip()
     if resolve_gateway_clarify(clarify_id, FORM_ANSWER_PREFIX + json.dumps(answer, ensure_ascii=False)):
         return TEXT_RESOLVED
     return TEXT_NO_PENDING
@@ -580,9 +592,10 @@ FORM_PROBLEM_SHAPE = "shape"
 
 
 def form_problem(clarify_id: str, values: dict) -> Optional[tuple[str, str]]:
-    """The first field of a refused private form, as ``(label, reason)``: ``FORM_PROBLEM_EMPTY``,
-    ``FORM_PROBLEM_IDENTIFIER`` (the email or username box) or ``FORM_PROBLEM_SHAPE``. The label has
-    no "(secret)" suffix. None when no field is wrong or the prompt is gone. Values are never logged."""
+    """The first field of a refused private form, as ``(label, FORM_PROBLEM_EMPTY)``. The private
+    form has no shape check, so an empty box is the only problem (``FORM_PROBLEM_IDENTIFIER`` and
+    ``FORM_PROBLEM_SHAPE`` stay for callers that name them). The label has no "(secret)" suffix.
+    None when no field is wrong or the prompt is gone. Values are never logged."""
     entry = get_pending(clarify_id)
     if entry is None or not entry.form_fields:
         return None
@@ -591,10 +604,6 @@ def form_problem(clarify_id: str, values: dict) -> Optional[tuple[str, str]]:
         value = str((values or {}).get(str(item.get("key") or "")) or "").strip()
         if not value:
             return label, FORM_PROBLEM_EMPTY
-        pattern = item.get("pattern")
-        if pattern and not re.fullmatch(pattern, value):
-            reason = FORM_PROBLEM_IDENTIFIER if item.get("key") == "identifier" else FORM_PROBLEM_SHAPE
-            return label, reason
     return None
 
 
@@ -610,7 +619,7 @@ def _attempt_text_response(entry: _ClarifyEntry, response: str, responder_id: Op
             return TEXT_HOLD_PENDING
         if not looks_like_secret(text):
             return TEXT_HELD
-    coerced, reason = _coerce_text_response_detailed(entry, response)
+    coerced, reason = _coerce_text_response_detailed(entry, response, private_form=private_form)
     if coerced is None:
         if reason == "not_an_answer":
             return TEXT_NOT_AN_ANSWER

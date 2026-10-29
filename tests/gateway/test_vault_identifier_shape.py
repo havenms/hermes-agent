@@ -29,8 +29,13 @@ def _clean():
 
 @pytest.mark.parametrize("text, ok", [
     ("me@example.com", True), ("+15551234567", True), ("jsmith", True), ("okayfine", True),
+    # Round 6 (live 2026-10-29): spaces, capitals, digits, dots and underscores are fine.
+    ("MICHAEL PERSONETTE", True), ("x", True), ("John.Smith_2", True), ("user 2", True), ("Michael Good", True),
     ("hi", False), ("Hi!", False), ("hello", False), ("thanks", False), ("ok", False), ("yes", False),
-    ("x", False), ("hi there", False),
+    ("hi there", False), ("ok thanks", False), ("what's up", False), ("thank you!", False),
+    ("are you there?", False), ("is that it?", False), ("MICHAEL?", False),
+    # The next card names the identifier, so a pasted login is not taken.
+    ("me@example.com Pass1234", False), ("jsmith Pass1234", False),
 ])
 def test_the_email_or_username_shape(text, ok):
     from gateway.vault_prompts import IDENTIFIER_PATTERN

@@ -33,9 +33,19 @@ def _clean():
 @pytest.mark.parametrize("text, ok", [
     ("123456", True), ("123 456", True), ("123-456", True), ("G-123456", True), ("AB12CD", True),
     ("4321", True), ("12345678", True),
+    # Round 6: any 3 to 12 character token with a digit, and spaced digit groups.
+    ("123", True), ("A1B", True), ("ABCDEF123456", True), ("12 34 56", True),
     ("wait 5 min", False), ("in 10 mins", False), ("give me 2", False), ("1 sec", False),
-    ("2 min pls", False), ("ok 1", False), ("10mins", False), ("wait5min", False), ("ABCDEF", False),
+    ("2 min pls", False), ("ok 1", False), ("ABCDEF", False), ("12", False), ("ABCDEF1234567", False),
 ])
 def test_the_code_shape(text, ok):
     from gateway.vault_prompts import CODE_PATTERN
     assert bool(re.fullmatch(CODE_PATTERN, text)) is ok
+
+
+@pytest.mark.parametrize("typed, used", [("123 456", "123456"), (" 12 34 56 ", "123456"), ("X7K 9PQ", "X7K 9PQ"),
+                                         ("G-123456", "G-123456")])
+def test_the_code_card_removes_the_spaces_in_digit_groups(typed, used):
+    from gateway.vault_prompts import build_vault_prompt_callbacks
+    code = build_vault_prompt_callbacks(lambda question, **kw: typed)["code"]
+    assert code("TestCo", "") == used

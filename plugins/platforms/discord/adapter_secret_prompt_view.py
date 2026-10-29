@@ -11,8 +11,9 @@ has no hidden input. Its answer completes the whole sequence, so the client fill
 one per card (``tools.clarify_gateway.attempt_form_response_for_entry``).
 
 The button and the modal answer the same gateway clarify entry as a typed reply
-(``tools.clarify_gateway.attempt_text_response_for_entry``), so the owner check, the answer shape
-check and the "skip" word behave the same on every path.
+(``tools.clarify_gateway.attempt_text_response_for_entry``), so the owner check and the "skip" word
+behave the same on every path. The modal has no answer shape check: the client typed the value into
+a labeled box on purpose, so any value that is not empty counts.
 
 Built by ``build_secret_prompt_view`` from ``adapter._define_discord_view_classes``, because discord.py
 can be installed lazily after the adapter module is imported.

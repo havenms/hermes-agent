@@ -22,6 +22,7 @@ the secret has been read, on platforms that support deletion.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Callable, Optional
 
 from tools.clarify_gateway import FORM_ANSWER_PREFIX, WRONG_ANSWER
@@ -54,16 +55,28 @@ VaultAsk = Callable[..., str]
 #   unlock: a password-manager unlock is asked when the bot is about to use it.
 VAULT_PROMPT_TIMEOUT_DEFAULTS = {"save_login": 4 * 3600, "code": 30 * 60, "unlock": 30 * 60}
 
-# A typed reply must look like the answer, or the prompt stays open and the user gets a hint.
+# A TYPED reply must not be clearly chat, or the prompt stays open and the user gets a hint.
 # Without this, the first unrelated message after a long wait ("are you there?") would be
-# stored as the username or typed into the page as the code.
-# Email, phone or username: one token, no spaces, and not a one-word chat reply ("hi", "ok",
-# "thanks", "yes"). The negative lookahead lists the chat words, case-insensitive, with an optional
-# trailing "!", "." or "?".
-_CHAT_TOKEN = (r"(?:yes|yep|yeah|yup|ya|no|nope|nah|ok|okay|k|kk|hi|hey|hello|hiya|thanks|thx|ty|sure|done|"
-               r"wait|sorry|lol|great|cool|nice|good|fine|please|help|what|why|how|hmm|huh|here|there|"
-               r"one|sec|min|later|soon|cheers|bye|morning|evening|night|welcome|again|still|now)")
-IDENTIFIER_PATTERN = rf"(?i)(?!{_CHAT_TOKEN}[!.?,]*$)\S{{2,254}}"
+# stored as the username or typed into the page as the code. The private form takes any value
+# (``tools.clarify_gateway``): the client typed it into a labeled box on purpose.
+# TAPAS: clients are beginners and services use odd usernames ("MICHAEL PERSONETTE"). A typed reply
+# is the email or username unless it is clearly chat: it ends with "?", or it is only greeting or
+# filler words ("hi", "ok thanks", "what's up"). Spaces, capitals, digits, dots and underscores are
+# fine. The next card names the identifier, so two more replies are not taken: an email together
+# with more words, and several words with a password-shaped word in them ("jsmith Pass1234").
+_CHAT_TOKEN = (r"(?:what['’]?s\s+up|wh?assup|sup|thank\s+you|thank\s+u|no\s+problem|got\s+it|all\s+good|"
+               r"hold\s+on|one\s+moment|"
+               r"yes|yep|yeah|yup|ya|no|nope|nah|ok|okay|k|kk|hi|hey|hello|hiya|yo|thanks|thx|ty|np|sure|done|"
+               r"wait|sorry|lol|haha|brb|great|cool|nice|good|fine|please|help|what|why|how|hmm|huh|here|"
+               r"there|one|sec|min|later|soon|cheers|bye|morning|afternoon|evening|night|welcome|again|"
+               r"still|now)")
+_SEP = r"[\s,.!]"
+IDENTIFIER_PATTERN = (
+    r"(?is)(?!.*\?$)"
+    rf"(?!{_SEP}*{_CHAT_TOKEN}(?:{_SEP}+{_CHAT_TOKEN})*{_SEP}*$)"
+    r"(?!(?=.*\s)(?=.*[^@\s]+@[^@\s]+\.[A-Za-z]{2,}))"
+    r"(?!(?=.*\s)(?=.*(?<!\S)(?=\S*[A-Za-z])(?=\S*\d)\S{6,}(?!\S)))"
+    r".{1,254}")
 # The password card's way back. A typed "wrong", "wrong email" or "not my email" goes back to the
 # email or username card (``tools.clarify_gateway.WRONG_WORDS``). "skip", "cancel" and "stop" still
 # decline the login (``DECLINE_WORDS``).
@@ -71,15 +84,12 @@ WRONG_LOGIN_LINE = "Wrong email or username? Just tell me."
 # How many times one save_login may go back to the email or username card.
 MAX_IDENTIFIER_REDO = 3
 
-# A one-time code: 4 to 8 digits (an optional space or dash in the middle: "123 456", "123-456"),
-# or one letter-and-digit token of 6 to 8 characters ("AB12CD"), or two letter-and-digit groups of 3
-# or 4 ("X7K-9PQ"), with at least 2 digits. Chat such as "wait 5 min", "1 sec" or "give me 2" never
-# matches.
-CODE_PATTERN = (r"(?:[A-Za-z]{1,3}-)?(?:\d{4,8}|\d{3,4}[ -]\d{3,4})"
-                r"|(?=[A-Za-z0-9]{6,8}$)(?=(?:[^0-9]*[0-9]){2})(?=.*[A-Za-z])"
-                r"(?!(?i:.*(?:min|sec|hr|hour|wait|give|later|soon)))[A-Za-z0-9]{6,8}"
-                r"|(?=(?:[^0-9]*[0-9]){2})(?=.*[A-Za-z])(?!(?i:.*(?:min|sec|hr|hour|wait|give|later|soon)))"
-                r"[A-Za-z0-9]{3,4}[ -][A-Za-z0-9]{3,4}")
+# A typed one-time code: one token of 3 to 12 characters with at least one digit ("123456",
+# "G-123456", "AB12CD", "X7K-9PQ"), or digit groups split by spaces ("123 456"). ``code_prompt``
+# removes the spaces from digit groups. Chat with spaces, such as "wait 5 min" or "give me 2",
+# never matches.
+CODE_PATTERN = r"(?=\S*\d)\S{3,12}|(?=(?:\D*\d){3})(?=.{3,24}$)\d+(?: +\d+)+"
+_SPACED_DIGITS = re.compile(r"\d+(?:\s+\d+)+")
 
 
 def vault_prompt_timeout(kind: str) -> float:
@@ -102,6 +112,20 @@ def _clean(value: Optional[str]) -> str:
     return (value or "").strip()
 
 
+def _clean_secret(value: Optional[str]) -> str:
+    """Same as :func:`_clean` for a password: the value as typed. Spaces at the ends stay."""
+    if value == WRONG_ANSWER:
+        return ""
+    value = value or ""
+    return value if value.strip() else ""
+
+
+def _clean_code(value: Optional[str]) -> str:
+    """The code without spaces at the ends, and without the spaces in digit groups ("123 456")."""
+    value = _clean(value)
+    return re.sub(r"\s+", "", value) if _SPACED_DIGITS.fullmatch(value) else value
+
+
 def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
     """Build the three vault prompt callbacks on top of ``ask``.
 
@@ -120,7 +144,7 @@ def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
         """Master password for an external password manager. Consumed by the
         manager's CLI to mint a session token; never written to disk."""
         name = display_name or backend
-        return _clean(ask(
+        return _clean_secret(ask(
             f"🔐 To use the passwords you keep in {name}, I need its main password.\n\n"
             "Reply with it here. I use it once to open it, I do not keep it, and I remove your message.",
             secret=True, last=True, kind="unlock", chat_guard=True,
@@ -202,7 +226,7 @@ def build_vault_prompt_callbacks(ask: VaultAsk) -> dict[str, Callable]:
         line from the last rejection ("That code didn't work..."); the card starts with it."""
         detail = f"\n\n{hint}" if hint else ""
         lead = f"{notice}\n\n" if notice else ""
-        return _clean(ask(
+        return _clean_code(ask(
             f"{lead}🔢 {site} just sent a code to your phone or email.\n\nReply with it here.{detail}",
             secret=True, last=True, kind="code", answer_pattern=CODE_PATTERN,
             **_need(f"the code {site} sent you"),
@@ -234,9 +258,10 @@ def _takes_form(ask: VaultAsk) -> bool:
 
 
 def _login_form_fields(extras: list) -> list[dict]:
-    """The fields of the one private login form: key, label as the client reads it, secret flag and
-    the answer shape. Discord has no hidden text input, so a secret field says so in its label."""
-    fields = [{"key": "identifier", "label": "Email or username", "secret": False, "pattern": IDENTIFIER_PATTERN},
+    """The fields of the one private login form: key, label as the client reads it and
+    the secret flag. Discord has no hidden text input, so a secret field says so in its label. No field
+    has a shape check: the client typed each value into a labeled box on purpose."""
+    fields = [{"key": "identifier", "label": "Email or username", "secret": False},
               {"key": "password", "label": "Password (secret)", "secret": True}]
     fields += [{"key": f"extra:{label}", "label": f"{label} (secret)", "secret": True} for label in extras]
     return fields
