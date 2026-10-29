@@ -265,12 +265,14 @@ class CDPSupervisor(DialogSupervisionMixin, FrameTrackingMixin):
             value = result_obj.get("description") or result_obj.get("unserializableValue")
         return {"ok": True, "result": value, "result_type": result_type}
 
-    def focus_page(self, origin: str, *, accept: Optional[str] = None, timeout: float = 10.0) -> dict[str, Any]:
+    def focus_page(self, origin: str, *, accept: Optional[str] = None, timeout: float = 10.0,
+                   prefer_target: Optional[str] = None) -> dict[str, Any]:
         """Re-attach the supervisor's page session to an open page target on ``origin``
         (``scheme://host[:port]``). The initial attach picks the FIRST page target, but tools
         that open their own tabs (browser_exec) put the login form somewhere else. With
         ``accept`` (a JS expression) the first same-origin tab where it evaluates truthy wins,
-        so a login and a checkout tab on one site resolve to the right one. Returns
+        so a login and a checkout tab on one site resolve to the right one. ``prefer_target`` (a CDP
+        target id, the tab browser_exec works in) is tried first. Returns
         ``{"ok": True, "url"}`` or ``{"ok": False, "error"}``; on failure the previous session stays."""
         loop = self._loop
         if loop is None or not loop.is_running():
@@ -296,6 +298,8 @@ class CDPSupervisor(DialogSupervisionMixin, FrameTrackingMixin):
                         candidates.append((t["targetId"], url))
                 except Exception:
                     continue
+            if prefer_target:
+                candidates.sort(key=lambda c: c[0] != prefer_target)  # stable: the rest keep their order
             for target_id, url in candidates:
                 sid = await _attach(target_id)
                 if accept:

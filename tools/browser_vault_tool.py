@@ -209,10 +209,16 @@ def _bound_page_origin(task_id: str, meta: Any, probe_kind: str) -> str | dict[s
         return {"success": False,
                 "error": "Could not determine the current page origin. Navigate to the login page first."}
     if page_origin not in allowed:
-        return {"success": False, "error_type": "origin_mismatch",
-                "error": (f"Refused: current page origin ({page_origin}) does not match the vault item's bound "
-                          f"origin(s) ({', '.join(allowed)}). Vault fills only run on the exact origin(s) the "
-                          "credential was saved for.")}
+        out = {"success": False, "error_type": "origin_mismatch", "bound_origins": list(allowed),
+               "page_origin": page_origin,
+               "error": (f"Refused: current page origin ({page_origin}) does not match the vault item's bound "
+                         f"origin(s) ({', '.join(allowed)}). Vault fills only run on the exact origin(s) the "
+                         "credential was saved for.")}
+        if getattr(meta, "kind", "") == "login":
+            out["hint"] = (f"If this is the right login for this page, call browser_vault action=add_origin "
+                           f"handle={meta.id} site={_site_of(page_origin)}, then fill again. If it is the wrong "
+                           "login, use another handle from list. Do not ask the client again.")
+        return out
     return page_origin
 
 
@@ -250,6 +256,11 @@ def browser_vault_list() -> str:
             if meta.identifier:
                 entry["identifier"] = meta.identifier
                 entry["identifier_type"] = meta.identifier_type
+            if meta.kind == "login":
+                # TAPAS: two accounts can share a label or an origin; name each one by its account.
+                entry["origins"] = saved_origins(meta)
+                if meta.identifier:
+                    entry["account"] = f"{meta.label}: {meta.identifier}"
             if getattr(meta, "extra_labels", ()):
                 entry["extra_fields"] = list(meta.extra_labels)
             items.append(entry)
@@ -298,13 +309,17 @@ def browser_vault_unlock(backend_name: str) -> str:
 
 def browser_vault_save_login(label: str = "", task_id: Optional[str] = None,
                              identifier: str = "", password: str = "",
-                             extra_fields: Any = None, extra: Any = None) -> str:
+                             extra_fields: Any = None, extra: Any = None, site: str = "") -> str:
     """Ask the user (masked prompt on their surface) for the login of the CURRENT page, store it in the local
     vault bound to that origin, and fill the password at once. The values never enter the conversation.
 
     ``identifier`` alone (no ``password``): the agent already knows the email or username (it typed it on
     the page, or the client said it). Then the prompt asks only for the password and any extra fields,
     and the login is stored with that identifier. A surface whose prompt cannot take it asks for both.
+
+    ``site`` (a host or URL): bind the login to that origin; its tab is the one filled. Without it, the
+    login is bound to the tab the agent works in (the tab its last browser_exec ended on), never just
+    the first tab the supervisor finds. A page with no password field and no login form is refused.
 
     Fallback: when the user already pasted the login in a normal chat message, the agent passes it as
     ``identifier`` + ``password``. It is stored exactly as a prompted login (same origin binding), the
@@ -332,12 +347,9 @@ def browser_vault_save_login(label: str = "", task_id: Optional[str] = None,
             "extra to ask the client in a prompt.")})
 
     effective_task_id = task_id or "default"
-    # The supervisor's default page session is whatever tab it attached to first (on Browser Use that is
-    # the daemon's blank tab); the login form lives in the tab with a password field, so focus that one.
-    _focus_bound_origin(effective_task_id, "", "login")
-    origin = _current_page_origin(effective_task_id)
-    if not origin:
-        return json.dumps({"success": False, "error": "Open the site's login page first; the login is saved for that page's origin."})
+    origin = _login_tab_origin(effective_task_id, site)
+    if isinstance(origin, dict):
+        return json.dumps(origin)
     prompt = get_save_login_prompt_callback()
     if not pasted and (prompt is None or not can_prompt_here()):
         return json.dumps({"success": False, "error_type": "prompt_unavailable",
@@ -415,6 +427,135 @@ def browser_vault_save_login(label: str = "", task_id: Optional[str] = None,
                         " The client's message with the password is still in the chat: ask them to delete it. "
                         "Never repeat the password in a message.")
     return json.dumps(out, ensure_ascii=False)
+
+
+# Truthy on a sign-in page: a password field, or a form that asks for an email or username
+# (a username-first page shows the password on a second step).
+_SIGN_IN_PROBE = (
+    "!!(document.querySelector('input[type=password]') || document.querySelector("
+    "'input[type=email], input[autocomplete~=username], input[autocomplete=email], "
+    "form input[name*=user i], form input[name*=email i], form input[name*=login i], "
+    "form input[id*=user i], form input[id*=email i], form input[id*=login i]'))")
+_TAB_PROBES["signin"] = _SIGN_IN_PROBE
+
+
+def _site_origin(site: str) -> Optional[str]:
+    """The origin of ``site`` (a host such as login.zillowpro.com, or a URL); None when empty.
+    Raises VaultError when it cannot be parsed."""
+    from agent.vault_store import normalize_origin
+    value = str(site or "").strip()
+    if not value:
+        return None
+    return normalize_origin(value if "://" in value else f"https://{value}")
+
+
+def _focus_task_tab(task_id: str) -> bool:
+    """Point the supervisor at the tab the agent's last browser_exec ended on. False when that tab
+    is unknown or gone; the caller then falls back to the first tab with a login form."""
+    try:
+        from agent.vault_store import normalize_origin
+        from tools.browser_use_cli import task_tab
+        tab = task_tab(task_id)
+        origin = normalize_origin(tab["url"]) if tab else ""
+        supervisor = _ensure_supervisor(task_id) if origin else None
+    except Exception:  # health: allow BLE001 -- an unknown tab keeps the old tab choice
+        return False
+    if supervisor is None:
+        return False
+    try:
+        focused = supervisor.focus_page(origin, prefer_target=tab.get("target_id") or None)
+    except TypeError:  # a supervisor without prefer_target: the first tab on that origin
+        focused = supervisor.focus_page(origin)
+    except Exception:  # health: allow BLE001 -- as above
+        return False
+    return bool(isinstance(focused, dict) and focused.get("ok"))
+
+
+def _is_sign_in_page(task_id: str) -> Optional[bool]:
+    """True or False when the page can be read; None when it cannot (then nothing is refused)."""
+    try:
+        res = _eval_js(task_id, _SIGN_IN_PROBE)
+    except Exception:  # health: allow BLE001 -- an unreadable page is not refused here
+        return None
+    if not (isinstance(res, dict) and res.get("success")):
+        return None
+    value = _parse_json_result(res.get("result"))
+    return bool(value) and value not in ("false", "0", "null")
+
+
+def _login_tab_origin(task_id: str, site: str = "") -> "str | dict":
+    """The origin save_login binds, with the supervisor on that tab; else the refusal dict.
+
+    With ``site``: the open tab on that origin (a tab with a password field first). Without it: the
+    tab the agent works in (``_focus_task_tab``); only when that is unknown, the first tab with a
+    password field, as before. Either way, a page with no password field and no login form is
+    refused, so a login is never bound to an unrelated tab (live 2026-10-29: a Zillow login was
+    bound to the Follow Up Boss tab in front)."""
+    from agent.vault_store import VaultError
+    try:
+        wanted = _site_origin(site)
+    except VaultError as exc:
+        return {"success": False, "error_type": "bad_site", "error": f"site={site!r} is not a host or URL ({exc})."}
+    if wanted:
+        if not _focus_bound_origin(task_id, wanted, "login"):
+            _focus_bound_origin(task_id, wanted, "signin")
+        origin = _current_page_origin(task_id)
+        if origin != wanted:
+            host = _site_of(wanted)
+            return {"success": False, "error_type": "site_not_open", "page_origin": origin, "error": (
+                f"No open tab is on {host}. Open its sign-in page with browser_exec, then call save_login "
+                f"again with site={host}. Do not ask the client yet.")}
+    else:
+        if not _focus_task_tab(task_id):
+            # The tab of the agent is unknown: the tab with a password field, as before.
+            _focus_bound_origin(task_id, "", "login")
+        origin = _current_page_origin(task_id)
+        if not origin:
+            return {"success": False,
+                    "error": "Open the site's login page first; the login is saved for that page's origin."}
+    if _is_sign_in_page(task_id) is False:
+        return {"success": False, "error_type": "not_a_sign_in_page", "page_origin": origin, "error": (
+            f"Refused: this page is not a sign-in page ({_site_of(origin)}): it has no password field and no "
+            "login form. Bring the service's sign-in tab to the front with browser_exec, or pass site=<its "
+            "host>, then call save_login again. Do not ask the client yet.")}
+    return origin
+
+
+def browser_vault_add_origin(handle: str = "", site: str = "", task_id: Optional[str] = None) -> str:
+    """Bind one more origin to a saved login, so the bot can fix a wrong or missing binding itself
+    (a service that signs in on another host, or lives on two hosts) without asking the client again.
+    Refused unless an open tab is on ``site``: the page shows the host."""
+    from agent.vault_backends import backend_for_handle
+    from agent.vault_store import VaultError, get_vault_store
+    effective_task_id = task_id or "default"
+    backend = backend_for_handle(handle)
+    meta = backend.get_meta(handle) if backend is not None else None
+    if meta is None:
+        return json.dumps({"success": False, "error": f"No vault item with handle {handle!r}. Use browser_vault action=list."})
+    if backend.name != "local" or meta.kind != "login":
+        return json.dumps({"success": False, "error_type": "add_origin_unsupported", "error": (
+            "add_origin works only for logins saved here with save_login. A password manager item keeps "
+            "the websites its manager stores.")})
+    try:
+        wanted = _site_origin(site)
+    except VaultError as exc:
+        return json.dumps({"success": False, "error_type": "bad_site", "error": f"site={site!r} is not a host or URL ({exc})."})
+    if not wanted:
+        return json.dumps({"success": False, "error_type": "site_required",
+                           "error": "Pass site=<host> of the page this login is for, e.g. site=login.zillowpro.com."})
+    _focus_bound_origin(effective_task_id, wanted, "")
+    page_origin = _current_page_origin(effective_task_id)
+    if page_origin != wanted:
+        shown = _site_of(page_origin) if page_origin else "no site"
+        return json.dumps({"success": False, "error_type": "site_not_open", "page_origin": page_origin, "error": (
+            f"Refused: the page is on {shown}, not on {_site_of(wanted)}. Open {_site_of(wanted)} with "
+            "browser_exec, then call add_origin again.")})
+    try:
+        updated = get_vault_store().add_origin(handle, wanted)
+    except VaultError as exc:
+        return json.dumps({"success": False, "error_type": "add_origin_failed", "error": str(exc)[:200]})
+    return json.dumps({"success": True, "handle": handle, "origins": saved_origins(updated),
+                       "next": "Call browser_vault action=fill with this handle on that page."}, ensure_ascii=False)
 
 
 def _password_rejected_hint(origin: str) -> str:
@@ -1042,14 +1183,18 @@ BROWSER_VAULT_SCHEMA = {
         "the password for a login, card fields after the user confirms, address fields; refused unless the page "
         "origin matches the item); save_login (nothing saved for this site: the client enters it in a login prompt, "
         "Hermes saves and fills it. If you already know the username, pass identifier= and only the password is "
-        "asked. Fallback: if the client already pasted the login in chat, pass identifier and "
+        "asked. Before save_login, bring the service's sign-in tab to the front, or pass site=<its host>; the "
+        "login is bound to that tab's site. Fallback: if the client already pasted the login in chat, pass identifier and "
         "password and it is saved the same way; when the form also asks for another secret such as a PIN or a "
         "security answer, pass its page label in extra_fields and the client is asked for it too); fill_field "
         "(handle, field, optional ref: type one named secret of a saved login, e.g. field=PIN, into one page "
         "field; fill already types extras whose label matches a field); enter_code (a one-time/2FA code after the password: generated from a saved "
         "authenticator key or asked of the user; no_code_field means approve on their device); unlock (backend: "
         "ask the user to unlock 1Password/Bitwarden); check (after EVERY submit of a form the vault filled: did the "
-        "site take it? enter_code checks by itself). On credential_rejected, tell the client in plain words WHICH "
+        "site take it? enter_code checks by itself); add_origin (handle, site: also bind a saved login to this "
+        "site, for a service that signs in on another host; the page must be on that site). If fill says "
+        "origin_mismatch and it is the right login, call add_origin; do not ask the client again. "
+        "On credential_rejected, tell the client in plain words WHICH "
         "thing did not work (use tell_client), then ask again for just that thing (save_login for a password, "
         "email or extra field, enter_code for a code); the next card says it too. Never re-ask silently. On "
         "retry_limit, account_locked, device_check or retries_left=0, stop and send the takeover link. "
@@ -1061,8 +1206,12 @@ BROWSER_VAULT_SCHEMA = {
     "parameters": {
         "type": "object",
         "properties": {
-            "action": {"type": "string", "enum": ["list", "fill", "fill_field", "save_login", "enter_code", "check", "unlock"]},
-            "handle": {"type": "string", "description": "fill / fill_field / enter_code: a handle from list."},
+            "action": {"type": "string", "enum": ["list", "fill", "fill_field", "save_login", "enter_code", "check",
+                                                  "unlock", "add_origin"]},
+            "handle": {"type": "string", "description": "fill / fill_field / enter_code / add_origin: a handle from list."},
+            "site": {"type": "string", "description": (
+                "save_login / add_origin: the host (or URL) of the sign-in page, e.g. login.zillowpro.com. "
+                "save_login binds the login to it; without it, to the tab you work in.")},
             "extra_fields": {"type": "array", "items": {"type": "string"}, "description": (
                 "save_login only: labels of other SECRET fields the form asks for, as the page shows them "
                 "(e.g. [\"PIN\", \"Security answer\"]; at most 4). Type non-secret fields yourself.")},
@@ -1114,7 +1263,9 @@ def _handle_vault(args: dict[str, Any], **kwargs) -> str:
         "save_login": lambda: browser_vault_save_login(
             label=label, task_id=tid, identifier=str(args.get("identifier") or ""),
             password=str(args.get("password") or ""), extra_fields=args.get("extra_fields"),
-            extra=args.get("extra")),
+            extra=args.get("extra"), site=str(args.get("site") or "")),
+        "add_origin": lambda: browser_vault_add_origin(
+            handle=handle, site=str(args.get("site") or ""), task_id=tid),
         "fill_field": lambda: browser_vault_fill_field(
             handle=handle, field=str(args.get("field") or ""), ref=str(args.get("ref") or ""), task_id=tid),
         "enter_code": lambda: browser_vault_enter_code(handle=handle, task_id=tid),
@@ -1122,7 +1273,7 @@ def _handle_vault(args: dict[str, Any], **kwargs) -> str:
     }
     if action not in page_ops:
         return json.dumps({"success": False, "error": f"Unknown action {action!r}; use list, fill, fill_field, save_login, "
-                                                       "enter_code, check or unlock."})
+                                                       "enter_code, check, unlock or add_origin."})
     # The tool executor already holds the task's browser; hold it here too, so a direct caller
     # (plugin, test, other executor) never loses the login page while the user is asked.
     from tools.browser_session_holds import hold_browser_for_task

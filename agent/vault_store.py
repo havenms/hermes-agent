@@ -559,9 +559,13 @@ class VaultStore:
     ) -> VaultItemMeta:
         """Add an item. ``secret`` is the sensitive payload (encrypted at rest).
 
-        ``replace_same_login``: for a login, update the item that already has the same origin and
-        identifier (case-insensitive) in place, with its id, instead of adding a second one. A client
-        who corrects a password must not leave the old, wrong login behind.
+        ``replace_same_login``: for a login, update the item that already has the same identifier
+        (case-insensitive) and the same origin or the same label (case-insensitive) in place, with
+        its id, instead of adding a second one. A client who corrects a password must not leave the
+        old, wrong login behind. TAPAS: a login saved again under its label, for example after it was
+        bound to the wrong tab, also replaces the old item. The new origin is the primary one; the
+        origins added with :meth:`add_origin` stay. A different identifier under the same label is a
+        second account and is added.
 
         For ``kind='login'``, ``origin`` is required and the payload must
         contain ``identifier_type``, ``identifier`` and ``password``. The
@@ -627,15 +631,43 @@ class VaultStore:
                 same = next((i for i, rec in enumerate(items)
                              if rec.get("kind") == "login" and rec.get("origin") == norm_origin
                              and str(rec.get("identifier") or "").casefold() == identifier.casefold()), None)
+                if same is None:
+                    same = next((i for i, rec in enumerate(items)
+                                 if rec.get("kind") == "login"
+                                 and str(rec.get("label") or "").strip().casefold() == label.casefold()
+                                 and str(rec.get("identifier") or "").casefold() == identifier.casefold()), None)
             if same is not None:
                 record["id"] = items[same].get("id") or item_id
                 record["created_at"] = items[same].get("created_at") or record["created_at"]
+                kept = [o for o in (items[same].get("extra_origins") or []) if o != norm_origin]
+                if kept:
+                    record["extra_origins"] = kept
                 record["updated_at"] = datetime.now(UTC).isoformat()
                 items[same] = record
             else:
                 items.append(record)
             self._write_all(items)
         return self._meta(record)
+
+    def add_origin(self, item_id: str, origin: str) -> VaultItemMeta:
+        """Bind one more exact origin to a login (TAPAS). A service can sign in on another host
+        (Follow Up Boss on login.zillowpro.com), or live on two hosts (www.zillow.com and
+        login.zillowpro.com). Matching stays exact-origin: no wildcard or parent domain."""
+        norm = normalize_origin(origin)
+        with self._locked():
+            items = self._read_all()
+            for rec in items:
+                if rec.get("id") != item_id:
+                    continue
+                if rec.get("kind") != "login":
+                    raise VaultError("only a login can have more than one origin")
+                extra = [o for o in (rec.get("extra_origins") or []) if o]
+                if norm != rec.get("origin") and norm not in extra:
+                    rec["extra_origins"] = extra + [norm]
+                    rec["updated_at"] = datetime.now(UTC).isoformat()
+                    self._write_all(items)
+                return self._meta(rec)
+        raise VaultError(f"no vault item with id {item_id!r}")
 
     def list_items(self) -> list[VaultItemMeta]:
         """Metadata-only listing. Secret payloads are never included."""
@@ -690,7 +722,17 @@ class VaultStore:
             identifier=identifier or None,
             has_otp=bool((rec.get("secret") or {}).get("otp_secret")),
             extra_labels=tuple(str(x) for x in (rec.get("extra_labels") or ())),
+            allowed_origins=VaultStore._origins(rec),
         )
+
+    @staticmethod
+    def _origins(rec: dict[str, Any]) -> tuple:
+        """Every origin of a login with origins added by :meth:`add_origin`, primary first; ``()``
+        for an item with one origin (``saved_origins`` then uses ``origin``)."""
+        extra = [o for o in (rec.get("extra_origins") or []) if o and o != rec.get("origin")]
+        if not extra:
+            return ()
+        return tuple(([rec["origin"]] if rec.get("origin") else []) + extra)
 
 
 MAX_EXTRA_FIELDS = 4  # Discord modals hold 5 text inputs: identifier + password + 3; the typed path takes 4

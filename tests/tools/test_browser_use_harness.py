@@ -56,7 +56,8 @@ def test_browser_exec_child_environment(tmp_path, monkeypatch):
     result = json.loads(bu.browser_exec("print('payload')", session="research", task_id="owner"))
     assert result["success"], result
     child = json.loads(result["output"])
-    assert child["stdin"] == "print('payload')"
+    # Round 6: the exec reports its tab for browser_vault save_login (stripped from the output).
+    assert child["stdin"] == "print('payload')" + bu._TAB_REPORT_POSTAMBLE
     for key in ("PYTHONHOME", "OPENAI_API_KEY", "BROWSERBASE_API_KEY", "_HERMES_BU_PRIVATE_BROWSER"):
         assert key not in child["env"]
     assert child["env"].get("PYTHONPATH") == bu._harness_site_dir()

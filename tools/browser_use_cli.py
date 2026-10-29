@@ -86,6 +86,52 @@ _hermes_ensure_own_tab()
 del _hermes_ensure_own_tab
 """
 
+# Appended to the model's code: report the tab this exec ended on, so browser_vault save_login binds
+# the login to the tab the agent works in, not to whichever tab the vault's supervisor sees first.
+# A marker line in stdout; browser_exec strips it before the model sees the output.
+_TAB_MARKER = "\x1ehermes-tab:"
+_TAB_REPORT_POSTAMBLE = """
+
+# hermes: report this session's current tab (stripped from the output)
+try:
+    import json as _hermes_json
+    _hermes_tab = current_tab()
+    print("\\n" + "\\x1e" + "hermes-tab:" + _hermes_json.dumps(
+        {"target_id": _hermes_tab.get("target_id"), "url": _hermes_tab.get("url")}))
+except Exception:
+    pass
+"""
+_TAB_MARKER_RE = re.compile(r"\n?\x1ehermes-tab:(\{[^\n]*\})\n?")
+_task_tabs: Dict[str, Dict[str, str]] = {}
+_task_tabs_lock = threading.Lock()
+
+
+def task_tab(task_id: Optional[str]) -> Optional[Dict[str, str]]:
+    """``{"target_id", "url"}`` of the tab the task's last browser_exec ended on, or None."""
+    with _task_tabs_lock:
+        tab = _task_tabs.get(str(task_id or "default"))
+        return dict(tab) if tab else None
+
+
+def _take_tab_report(task_id: Optional[str], stdout: str) -> str:
+    """Record the tab report from ``stdout`` for ``task_id`` and return stdout without it."""
+    text = stdout or ""
+    found = None
+    for match in _TAB_MARKER_RE.finditer(text):
+        found = match.group(1)
+    if found is None:
+        return text
+    try:
+        tab = json.loads(found)
+    except ValueError:
+        tab = None
+    if isinstance(tab, dict) and str(tab.get("url") or "").startswith(("http://", "https://")):
+        with _task_tabs_lock:
+            _task_tabs[str(task_id or "default")] = {"target_id": str(tab.get("target_id") or ""),
+                                                     "url": str(tab["url"])}
+    return _TAB_MARKER_RE.sub("", text)
+
+
 _DEFAULT_TIMEOUT_S = 300
 _MIN_TIMEOUT_S = 5
 _MAX_TIMEOUT_S = 1800
@@ -719,6 +765,7 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
     private_browser = env.pop(_PRIVATE_BROWSER_SENTINEL, None)  # always pop: never exported to the CLI
     if session and not private_browser:
         code = _OWN_TAB_PREAMBLE + code
+    code = code + _TAB_REPORT_POSTAMBLE
 
     workspace = _workspace_dir(task_id)
     if workspace:
@@ -759,6 +806,7 @@ def browser_exec(code: str, session: str = "", timeout_s: int = _DEFAULT_TIMEOUT
             return dispatched["error_result"]
         return tool_result(dispatched)
     proc = dispatched["proc"]
+    proc.stdout = _take_tab_report(task_id, proc.stdout)
 
     # browser_vault fill registers injected values with this forced model-egress
     # boundary. Preserve raw stdout only for screenshot-path detection below.
