@@ -212,7 +212,9 @@ class GatewayInboundHooksMixin:
         """Drain gate, user-defined quick commands (exec/alias) and plugin slash commands →
         ``(handled, result, command)``; an alias quick command rewrites ``command``."""
         if self._draining and getattr(event, "_admitted_before_drain", False) is not True:
-            return True, t("gateway.busy.drain_rejected_new_work", action=self._status_action_gerund()), command
+            from gateway.quiet_status import status_line
+            return True, status_line("gateway.busy.drain_rejected_new_work", source,
+                                     action=self._status_action_gerund()), command
 
         # User-defined quick commands (bypass agent loop, no LLM call)
         qcmd = self._hm_quick_commands().get(command) if command else None

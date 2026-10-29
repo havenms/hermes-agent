@@ -20,6 +20,7 @@ from contextlib import suppress
 from pathlib import Path
 
 from agent.i18n import t
+from gateway.quiet_status import status_line
 from gateway.config import Platform
 from gateway.platforms.base import EphemeralReply
 from gateway.platforms.event import MessageEvent, MessageType
@@ -938,9 +939,9 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
             if queue_during_drain:
                 self._queue_or_replace_pending_event(_quick_key, event)
             return (
-                t("gateway.busy.drain_queued", action=self._status_action_gerund())
+                status_line("gateway.busy.drain_queued", source, action=self._status_action_gerund())
                 if queue_during_drain
-                else t("gateway.busy.drain_rejected", action=self._status_action_gerund())
+                else status_line("gateway.busy.drain_rejected", source, action=self._status_action_gerund())
             )
         if effective_busy_input_mode == "queue":
             logger.debug("PRIORITY queue follow-up for session %s", _quick_key)
@@ -1461,7 +1462,7 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
             # only fall to zero. Reversible.
             if self._external_drain_active:
                 logger.info("Refusing new turn for session %s — external drain active.", _quick_key)
-                return t("gateway.busy.draining_maintenance")
+                return status_line("gateway.busy.draining_maintenance", source)
 
         # Claim this session before any await: many awaits sit between here and _run_agent
         # registering the real AIAgent; without this sentinel a second message during any of them
@@ -1501,7 +1502,7 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayInboundTranscriptionM
                     "the user must resend",
                     _quick_key, exc.session_id,
                 )
-                return t("gateway.busy.another_turn_running")
+                return status_line("gateway.busy.another_turn_running", source)
             try:
                 await self._run_post_turn_hooks(
                     agent_result=_agent_result, source=source, is_internal=is_internal, event=event,

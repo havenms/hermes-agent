@@ -3083,7 +3083,7 @@ _gateway_runner_ref: _weakref.ref = lambda: None
 
 
 def _normalize_empty_agent_response(
-    agent_result: dict, response: str, *, history_len: int = 0) -> str:
+    agent_result: dict, response: str, *, history_len: int = 0, source: Any = None) -> str:
     """Normalize empty/None agent responses into user-facing messages.
     Covers ``failed``, work done (api_calls > 0) with no text, and never-ran (api_calls == 0, the
     post-/stop silent-drop from a stale generation token) with a retry hint.
@@ -3098,7 +3098,11 @@ def _normalize_empty_agent_response(
     A failed context-overflow turn whose ``final_response`` is only the raw provider envelope
     (``HTTP 400: {...}``) is rewritten too: returned unchanged, chat sanitizers turn it into a
     generic provider-failed reply and the user never sees /compact. Curated agent text survives.
+
+    ``source``: in a quiet client chat (``gateway.quiet_status``), the "send it again" lines name
+    no turn, /stop or disk.
     """
+    from gateway.quiet_status import status_line
     is_overflow = is_context_overflow_failure_result(agent_result, history_len)
     if response and not (is_overflow and _looks_like_gateway_provider_error(response)):
         return response
@@ -3110,8 +3114,8 @@ def _normalize_empty_agent_response(
         failure_reason = str(agent_result.get("failure_reason") or "")
         if failure_reason.startswith("session_persistence_failed") or "session storage" in error_str:
             if failure_reason.endswith(":disk") or "disk" in error_str:
-                return t("gateway.errors.session_storage_unavailable_disk")
-            return t("gateway.errors.session_storage_unavailable")
+                return status_line("gateway.errors.session_storage_unavailable_disk", source)
+            return status_line("gateway.errors.session_storage_unavailable", source)
         if is_overflow:
             return _context_overflow_reply()
         # Raw exception text (class names, JSON bodies, URLs) stays in the gateway log.
@@ -3133,7 +3137,7 @@ def _normalize_empty_agent_response(
         # (response=0 chars) and the user sees no reply at all. Surface a short retry hint so the message
         # isn't lost in silence. (#31884)
         if api_calls == 0:
-            return t("gateway.errors.interrupted_before_start")
+            return status_line("gateway.errors.interrupted_before_start", source)
         return response
     if api_calls > 0:
         # Hidden-reasoning-only retry exhaustion: the loop's sentinel text ("Codex response remained
@@ -3163,7 +3167,7 @@ def _normalize_empty_agent_response(
 
     # api_calls == 0, not failed/interrupted: agent never ran (post-/stop race); don't drop silently.
     if api_calls == 0 and not agent_result.get("partial"):
-        return t("gateway.errors.previous_turn_cleanup")
+        return status_line("gateway.errors.previous_turn_cleanup", source)
 
     return response
 

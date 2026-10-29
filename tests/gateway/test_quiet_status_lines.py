@@ -112,7 +112,7 @@ def test_quiet_busy_reply_is_one_plain_line(monkeypatch, flags):
                                                "current_tool": "browser_vault"}
     text = runner._compose_busy_ack_message(_event(), 100.0, None, agent, demoted_for_subagents=False,
                                             demoted_for_compression=False, **flags)
-    assert text == "Got it. I will answer as soon as I finish what I am doing."
+    assert text == "One moment, I am finishing something. I will answer you right after."
 
 
 def test_busy_reply_is_not_quiet_without_the_setting(monkeypatch):

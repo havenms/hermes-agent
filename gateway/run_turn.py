@@ -1566,9 +1566,10 @@ class GatewayTurnMixin(GatewayTurnPrepareMixin, GatewayTurnHygieneMixin, Gateway
         if not _warn_adapter:
             return
         try:
+            from gateway.quiet_status import status_line
             await _warn_adapter.emit_warning(
-                source.chat_id, t(
-                    "gateway.progress.stuck_warning",
+                source.chat_id, status_line(
+                    "gateway.progress.stuck_warning", source,
                     minutes=int(worker.agent_warning // 60) or 1,
                     remaining=int((worker.agent_timeout - worker.agent_warning) // 60) or 1),
                 metadata=_interim_metadata(_status_thread_metadata), logical_platform=source.platform,

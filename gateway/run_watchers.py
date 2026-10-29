@@ -181,7 +181,11 @@ class GatewaySessionWatchersMixin:
         from gateway.run import _async_profile_runtime_scope
         try:
             metadata = self._thread_metadata_for_source(source)
-            notice = format_session_stall_notification(idle_seconds)
+            from agent.i18n import t
+            from gateway.quiet_status import is_quiet
+            # A quiet client chat gets one plain line: no minutes, no /stop or /new (round 6).
+            notice = (t("gateway.progress.quiet_stuck") if is_quiet(source)
+                      else format_session_stall_notification(idle_seconds))
             result = None
             async def send_notice():
                 nonlocal result

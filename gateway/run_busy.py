@@ -18,6 +18,7 @@ import os
 import time
 from agent.i18n import DEFAULT_LANGUAGE, t
 from agent.session_activity import format_iteration_progress
+from gateway.quiet_status import status_line
 from gateway.config import Platform
 from gateway.platforms.base import EphemeralReply
 from gateway.platforms.event import MessageEvent, MessageType
@@ -602,9 +603,9 @@ class GatewayBusySessionMixin:
             return
         if self._queue_during_drain_enabled(effective_mode):
             self._queue_or_replace_pending_event(session_key, event)
-            message = t("gateway.busy.drain_queued", action=self._status_action_gerund())
+            message = status_line("gateway.busy.drain_queued", event, action=self._status_action_gerund())
         else:
-            message = t("gateway.busy.drain_rejected", action=self._status_action_gerund())
+            message = status_line("gateway.busy.drain_rejected", event, action=self._status_action_gerund())
         await self._send_busy_reply(event, adapter, message)
 
     # Bare-word approval replies → (verb, args) for the synthesized slash command. English words
@@ -822,14 +823,9 @@ class GatewayBusySessionMixin:
 
     def _busy_ack_is_quiet(self, event: MessageEvent) -> bool:
         """True when ``display.tool_progress`` is ``quiet`` for this platform (client chats)."""
-        try:
-            from gateway.run import _load_gateway_config, _platform_config_key
-            from gateway.display_config import resolve_tool_progress
-            mode, _explicit = resolve_tool_progress(
-                _load_gateway_config(), _platform_config_key(event.source.platform))
-            return mode == "quiet"
-        except Exception:
-            return False
+        # Round 6: the same resolution as the turn's own mode (YAML, then HERMES_TOOL_PROGRESS_MODE).
+        from gateway.quiet_status import is_quiet
+        return is_quiet(event)
 
     @property
     def _BUSY_DEMOTED_TAIL(self) -> str:
@@ -891,6 +887,7 @@ class GatewayBusySessionMixin:
             head, tail = t("gateway.busy.interrupting_head"), t("gateway.busy.interrupting_tail")
         message = t("gateway.busy.ack", head=head, detail=status_detail, tail=tail)
         if self._busy_ack_is_quiet(event):
+            # Every busy mode, interrupt included: no counts, no iterations, no times (round 6).
             # Client chats: one plain line, no run, tool, subagent or context words.
             return t("gateway.busy.quiet_ack")
 
